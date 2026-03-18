@@ -32,4 +32,5 @@ protected:
   int _weight_power;
 
   std::vector<Point> _master_positions;
+  std::vector<std::vector<Real>> _slave_weights;
 };
