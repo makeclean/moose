@@ -30,7 +30,7 @@ protected:
   std::string _slave_node_set_id;
   Real _penalty;
 
-  std::vector<std::vector<Real>> _slave_positions;
+  std::vector<Point> _slave_positions;
   Point _master_position;
 
   bool _use_automatic_weights;
