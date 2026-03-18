@@ -29,10 +29,8 @@ RBE3Constraint::validParams()
   params.addParam<BoundaryName>(
       "slave_node_set", "NaN", "The boundary ID associated with the slave node set");
   params.addRequiredParam<Real>("penalty", "The penalty used for the boundary term");
-  MooseEnum weighting_type("constant inverse_distance manual");
   params.addParam<MooseEnum>("weighting_type",
-                             weighting_type,
-                             "constant",
+                             "constant inverse_distance manual",
                              "Type of weighting to use: 'constant' gives equal weights to all "
                              "master nodes, 'inverse_distance' uses inverse distance weighting "
                              "from each slave to each master, 'manual' uses user-provided weights.");
