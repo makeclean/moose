@@ -32,4 +32,28 @@
     max_parallel = 1
     requirement = "The system shall support the ability to constrain nodal values of different variables."
   []
+
+  [rbe3_constraint_inverse_distance]
+    type = 'Exodiff'
+    input = 'rbe3_constraint.i'
+    exodiff = 'rbe3_constraint_out.e'
+    max_parallel = 1
+    requirement = "The system shall support RBE3 constraints with inverse distance weighting."
+  []
+
+  [rbe3_constant]
+    type = 'Exodiff'
+    input = 'rbe3_constant.i'
+    exodiff = 'rbe3_constant_out.e'
+    max_parallel = 1
+    requirement = "The system shall support RBE3 constraints with constant weighting."
+  []
+
+  [rbe3_manual]
+    type = 'Exodiff'
+    input = 'rbe3_manual.i'
+    exodiff = 'rbe3_manual_out.e'
+    max_parallel = 1
+    requirement = "The system shall support RBE3 constraints with manually specified weights."
+  []
 []
