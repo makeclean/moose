@@ -15,9 +15,6 @@ protected:
   virtual Real computeQpResidual(Moose::ConstraintType type) override;
   virtual Real computeQpJacobian(Moose::ConstraintJacobianType type) override;
   virtual void updateConnectivity() override;
-  virtual void initialize() override;
-  virtual void execute() override;
-  virtual void finalize() override;
 
   /// Primary node IDs (explicit list)
   std::vector<dof_id_type> _primary_nodes;
@@ -27,6 +24,9 @@ protected:
   
   /// Primary sideset name
   BoundaryName _primary_sideset;
+  
+  /// Secondary sideset name (should contain only one node)
+  BoundaryName _secondary_sideset;
   
   /// Weight calculation method
   MooseEnum _weight_method;
@@ -40,6 +40,9 @@ protected:
   /// Whether we're using sideset-based node derivation
   bool _using_sideset;
   
+  /// Whether we're using secondary sideset
+  bool _using_secondary_sideset;
+  
   /// Cached node coordinates for distance-based weighting
   std::vector<Point> _primary_node_coords;
   
@@ -51,6 +54,9 @@ protected:
   
   /// Derive primary nodes from sideset if specified
   void deriveNodesFromSideset();
+  
+  /// Derive secondary nodes from sideset if specified
+  void deriveSecondaryNodesFromSideset();
   
   /// Calculate distance-based weights
   void calculateDistanceWeights();

@@ -19,6 +19,7 @@ validParams<RBE3Constraint>()
   // Node specification parameters
   params.addParam<std::vector<dof_id_type>>("primary_nodes", "Primary node IDs");
   params.addParam<BoundaryName>("primary_sideset", "Primary sideset name");
+  params.addParam<BoundaryName>("secondary_sideset", "Secondary sideset name (should contain only one node)");
   params.addRequiredParam<std::vector<dof_id_type>>("secondary_nodes", "Secondary node IDs");
   
   // Weight parameters
@@ -29,10 +30,6 @@ validParams<RBE3Constraint>()
   // Other parameters
   params.addParam<unsigned int>("ndof", 3, "Number of degrees of freedom (typically 3)");
   
-  // Validate that either primary_nodes or primary_sideset is specified, but not both
-  params.addCoupledVar("primary_nodes", "Primary node IDs");
-  params.addCoupledVar("primary_sideset", "Primary sideset name");
-  
   return params;
 }
 
@@ -41,10 +38,12 @@ RBE3Constraint::RBE3Constraint(const InputParameters & parameters)
     _primary_nodes(getParam<std::vector<dof_id_type>>("primary_nodes")),
     _secondary_nodes(getParam<std::vector<dof_id_type>>("secondary_nodes")),
     _primary_sideset(getParam<BoundaryName>("primary_sideset")),
+    _secondary_sideset(getParam<BoundaryName>("secondary_sideset")),
     _weight_method(getParam<MooseEnum>("weight_method")),
     _weights(getParam<std::vector<Real>>("weights")),
     _ndof(getParam<unsigned int>("ndof")),
-    _using_sideset(isParamValid("primary_sideset"))
+    _using_sideset(isParamValid("primary_sideset")),
+    _using_secondary_sideset(isParamValid("secondary_sideset"))
 {
   // Validate node specification parameters
   bool has_nodes = isParamValid("primary_nodes");
@@ -56,8 +55,8 @@ RBE3Constraint::RBE3Constraint(const InputParameters & parameters)
   if (!has_nodes && !has_sideset)
     mooseError("Must specify either 'primary_nodes' or 'primary_sideset'.");
   
-  if (_secondary_nodes.empty())
-    mooseError("RBE3 constraint must have at least one secondary node");
+  if (_secondary_nodes.empty() && !_using_secondary_sideset)
+    mooseError("RBE3 constraint must have at least one secondary node or specify 'secondary_sideset'.");
   
   // Initialize weights if not explicitly provided
   if (_weights.empty() && _weight_method != "explicit")
@@ -67,12 +66,18 @@ RBE3Constraint::RBE3Constraint(const InputParameters & parameters)
 }
 
 void
-RBE3Constraint::initialize()
+RBE3Constraint::updateConnectivity()
 {
   // Derive primary nodes from sideset if needed
   if (_using_sideset)
   {
     deriveNodesFromSideset();
+  }
+  
+  // Derive secondary nodes from sideset if needed
+  if (_using_secondary_sideset)
+  {
+    deriveSecondaryNodesFromSideset();
   }
   
   // Validate we have primary nodes
@@ -85,26 +90,8 @@ RBE3Constraint::initialize()
   
   // Calculate weights based on selected method
   calculateWeights();
-}
-
-void
-RBE3Constraint::execute()
-{
-  // Execute base class functionality
-  NodalConstraint::execute();
-}
-
-void
-RBE3Constraint::finalize()
-{
-  // Finalize base class functionality
-  NodalConstraint::finalize();
-}
-
-void
-RBE3Constraint::updateConnectivity()
-{
-  // Update connectivity for the constraint
+  
+  // Call parent updateConnectivity
   NodalConstraint::updateConnectivity();
 }
 
@@ -132,10 +119,47 @@ RBE3Constraint::deriveNodesFromSideset()
     }
   }
   
-  // If we have no nodes, issue an error
+  // If we have no nodes, issue a warning
   if (_primary_nodes.empty())
   {
     mooseWarning("No nodes found on sideset ", _primary_sideset);
+  }
+}
+
+void
+RBE3Constraint::deriveSecondaryNodesFromSideset()
+{
+  // Get the mesh and boundary information
+  const MooseMesh & mesh = _mesh;
+  
+  // Clear existing secondary nodes
+  _secondary_nodes.clear();
+  
+  // Get the boundary ID
+  dof_id_type boundary_id = mesh.getBoundaryID(_secondary_sideset);
+  
+  // Get all nodes on the specified boundary
+  std::vector<dof_id_type> sideset_nodes = mesh.getNodeList(boundary_id);
+  
+  // Only add nodes that belong to this processor
+  for (const auto node_id : sideset_nodes)
+  {
+    if (mesh.nodeRef(node_id).processor_id() == _subproblem.processor_id())
+    {
+      _secondary_nodes.push_back(node_id);
+    }
+  }
+  
+  // Validate that there's exactly one node in the secondary sideset
+  if (_secondary_nodes.size() != 1)
+  {
+    mooseError("Secondary sideset ", _secondary_sideset, " must contain exactly one node, found ", _secondary_nodes.size());
+  }
+  
+  // If we have no nodes, issue a warning
+  if (_secondary_nodes.empty())
+  {
+    mooseWarning("No nodes found on secondary sideset ", _secondary_sideset);
   }
 }
 
@@ -146,7 +170,7 @@ RBE3Constraint::calculateWeights()
   if (_weight_method == "explicit")
   {
     // Use explicit weights provided by user
-    if (_weights.size() != _primary_nodes.size())
+    if (!_weights.empty() && _weights.size() != _primary_nodes.size())
       mooseError("Number of weights must match number of primary nodes when using 'explicit' method");
   }
   else if (_weight_method == "equal")
