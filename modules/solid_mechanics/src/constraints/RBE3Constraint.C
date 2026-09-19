@@ -9,11 +9,10 @@
 
 registerMooseObject("SolidMechanicsApp", RBE3Constraint);
 
-template <>
 InputParameters
-validParams<RBE3Constraint>()
+RBE3Constraint::validParams()
 {
-  InputParameters params = validParams<NodalConstraint>();
+  InputParameters params = NodalConstraint::validParams();
   params.addClassDescription("RBE3 constraint for rigid body connections between nodes");
   
   // Node specification parameters
