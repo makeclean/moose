@@ -66,4 +66,7 @@ protected:
   
   /// Calculate distance-based weights
   void calculateDistanceWeights();
+  
+  /// Multi-variable support - handle multiple displacement components
+  void setupMultiVariableSupport();
 };

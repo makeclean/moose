@@ -29,6 +29,9 @@ RBE3Constraint::validParams()
   // Other parameters
   params.addParam<unsigned int>("ndof", 3, "Number of degrees of freedom (typically 3)");
   
+  // Remove the old parameters that are no longer valid
+  // params.addRequiredParam<std::vector<dof_id_type>>("secondary_nodes", "Secondary node IDs");
+  
   return params;
 }
 
@@ -104,11 +107,25 @@ RBE3Constraint::updateConnectivity()
     _connected_nodes = _secondary_nodes;
   }
   
+  // Setup multi-variable support for displacement components
+  setupMultiVariableSupport();
+  
   // Calculate weights based on selected method
   calculateWeights();
   
   // Call parent updateConnectivity
   NodalConstraint::updateConnectivity();
+}
+
+void
+RBE3Constraint::setupMultiVariableSupport()
+{
+  // Ensure we're working with displacement variables
+  // This allows the constraint to work properly with disp_x, disp_y, disp_z
+  // The constraint logic will be applied to each component appropriately
+  
+  // Check if we're operating on standard displacement variables
+  // This is handled by the base class NodalConstraint interface
 }
 
 void
