@@ -6,6 +6,7 @@
 #include "MooseMesh.h"
 #include "libmesh/point.h"
 #include "libmesh/elem.h"
+#include "libmesh/mesh_tools.h"
 
 registerMooseObject("SolidMechanicsApp", RBE3Constraint);
 
@@ -15,11 +16,10 @@ RBE3Constraint::validParams()
   InputParameters params = NodalConstraint::validParams();
   params.addClassDescription("RBE3 constraint for rigid body connections between nodes");
   
-  // Node specification parameters
-  params.addParam<std::vector<dof_id_type>>("primary_nodes", "Primary node IDs");
-  params.addParam<BoundaryName>("primary_sideset", "Primary sideset name");
+  // Node specification parameters - simplified interface
+  params.addRequiredParam<BoundaryName>("primary_sideset", "Primary sideset name");
   params.addParam<BoundaryName>("secondary_sideset", "Secondary sideset name (should contain only one node)");
-  params.addRequiredParam<std::vector<dof_id_type>>("secondary_nodes", "Secondary node IDs");
+  params.addParam<Point>("secondary_node_coordinate", "Secondary node coordinate (creates temporary node)");
   
   // Weight parameters
   MooseEnum weight_methods("explicit equal distance", "equal");
@@ -34,46 +34,52 @@ RBE3Constraint::validParams()
 
 RBE3Constraint::RBE3Constraint(const InputParameters & parameters)
   : NodalConstraint(parameters),
-    _primary_nodes(getParam<std::vector<dof_id_type>>("primary_nodes")),
-    _secondary_nodes(getParam<std::vector<dof_id_type>>("secondary_nodes")),
     _primary_sideset(getParam<BoundaryName>("primary_sideset")),
     _secondary_sideset(getParam<BoundaryName>("secondary_sideset")),
+    _secondary_node_coordinate(getParam<Point>("secondary_node_coordinate")),
     _weight_method(getParam<MooseEnum>("weight_method")),
     _weights(getParam<std::vector<Real>>("weights")),
     _ndof(getParam<unsigned int>("ndof")),
-    _using_sideset(isParamValid("primary_sideset")),
-    _using_secondary_sideset(isParamValid("secondary_sideset"))
+    _using_secondary_sideset(isParamValid("secondary_sideset")),
+    _using_coordinate(isParamValid("secondary_node_coordinate")),
+    _temporary_node_id(-1)
 {
-  // Validate node specification parameters
-  bool has_nodes = isParamValid("primary_nodes");
-  bool has_sideset = isParamValid("primary_sideset");
+  // Validate parameter combinations
+  bool has_secondary_sideset = isParamValid("secondary_sideset");
+  bool has_coordinate = isParamValid("secondary_node_coordinate");
   
-  if (has_nodes && has_sideset)
-    mooseError("Cannot specify both 'primary_nodes' and 'primary_sideset'. Choose one or the other.");
+  if (has_secondary_sideset && has_coordinate)
+    mooseError("Cannot specify both 'secondary_sideset' and 'secondary_node_coordinate'. Choose one or the other.");
   
-  if (!has_nodes && !has_sideset)
-    mooseError("Must specify either 'primary_nodes' or 'primary_sideset'.");
+  if (!has_secondary_sideset && !has_coordinate)
+    mooseError("Must specify either 'secondary_sideset' or 'secondary_node_coordinate'.");
   
-  if (_secondary_nodes.empty() && !_using_secondary_sideset)
-    mooseError("RBE3 constraint must have at least one secondary node or specify 'secondary_sideset'.");
+  // Validate that secondary sideset contains exactly one node if specified
+  if (has_secondary_sideset)
+  {
+    // We'll check this during connectivity update when we can access the mesh
+  }
   
   // Initialize weights if not explicitly provided
   if (_weights.empty() && _weight_method != "explicit")
   {
-    _weights.resize(_primary_nodes.size(), 1.0);
+    // We'll determine proper weight size during connectivity update
   }
 }
 
 void
 RBE3Constraint::updateConnectivity()
 {
-  // Derive primary nodes from sideset if needed
-  if (_using_sideset)
+  // Create temporary node from coordinate if needed
+  if (_using_coordinate)
   {
-    deriveNodesFromSideset();
+    createTemporaryNodeFromCoordinate();
   }
   
-  // Derive secondary nodes from sideset if needed
+  // Derive primary nodes from sideset
+  deriveNodesFromSideset();
+  
+  // If we're using a secondary sideset, derive nodes from it
   if (_using_secondary_sideset)
   {
     deriveSecondaryNodesFromSideset();
@@ -81,17 +87,58 @@ RBE3Constraint::updateConnectivity()
   
   // Validate we have primary nodes
   if (_primary_nodes.empty())
-    mooseError("No primary nodes found. Check the primary_sideset or primary_nodes parameters.");
+    mooseError("No primary nodes found. Check the primary_sideset parameter.");
   
   // Set up the constraint connectivity for the base class
   _primary_node_vector = _primary_nodes;
-  _connected_nodes = _secondary_nodes;
+  
+  // For coordinate-based nodes, use the temporary node ID
+  if (_using_coordinate && _temporary_node_id != -1)
+  {
+    _connected_nodes.clear();
+    _connected_nodes.push_back(_temporary_node_id);
+  }
+  else if (_using_secondary_sideset)
+  {
+    // Use the derived secondary nodes
+    _connected_nodes = _secondary_nodes;
+  }
   
   // Calculate weights based on selected method
   calculateWeights();
   
   // Call parent updateConnectivity
   NodalConstraint::updateConnectivity();
+}
+
+void
+RBE3Constraint::createTemporaryNodeFromCoordinate()
+{
+  // Create a temporary node from the coordinate
+  const MooseMesh & mesh = _mesh;
+  
+  // Generate a unique name for the temporary sideset
+  _temporary_sideset_name = "rbe3_temporary_" + std::to_string(_tid);
+  
+  // Create the node in the mesh
+  Node * temp_node = mesh.addNode(_secondary_node_coordinate, _temporary_sideset_name);
+  _temporary_node_id = temp_node->id();
+  
+  // Add the node to our temporary sideset
+  mesh.addBoundary(_temporary_sideset_name, _temporary_node_id);
+  
+  // Update connectivity for the mesh to include our new node
+  const auto & node_to_elem_map = mesh.nodeToElemMap();
+  auto * const distributed_mesh = dynamic_cast<libMesh::DistributedMesh *>(&mesh.getMesh());
+  
+  if (distributed_mesh)
+  {
+    // Update mesh connectivity for distributed mesh
+    distributed_mesh->add_extra_ghost_node(temp_node);
+  }
+  
+  // Set up the temporary sideset
+  mesh.addBoundary(_temporary_sideset_name, _temporary_node_id);
 }
 
 void
@@ -121,7 +168,7 @@ RBE3Constraint::deriveNodesFromSideset()
   // If we have no nodes, issue a warning
   if (_primary_nodes.empty())
   {
-    mooseWarning("No nodes found on sideset ", _primary_sideset);
+    mooseWarning("No nodes found on primary sideset ", _primary_sideset);
   }
 }
 
@@ -188,12 +235,22 @@ void
 RBE3Constraint::calculateDistanceWeights()
 {
   // For distance-based weighting, we need to calculate distances from secondary node to primary nodes
-  if (_secondary_nodes.empty())
+  if (_secondary_nodes.empty() && !_using_coordinate)
     mooseError("Need at least one secondary node to calculate distance-based weights");
   
-  // Use the first secondary node as reference point
-  const Node & secondary_node = _mesh.nodeRef(_secondary_nodes[0]);
-  _reference_point = secondary_node;
+  // Use the secondary node as reference point
+  Point reference_point;
+  if (_using_coordinate)
+  {
+    // For coordinate-based, use the coordinate point directly
+    reference_point = _secondary_node_coordinate;
+  }
+  else if (!_secondary_nodes.empty())
+  {
+    // For sideset-based, use the first secondary node
+    const Node & secondary_node = _mesh.nodeRef(_secondary_nodes[0]);
+    reference_point = secondary_node;
+  }
   
   // Clear existing weights and prepare for new calculation
   _weights.clear();
@@ -213,7 +270,7 @@ RBE3Constraint::calculateDistanceWeights()
     _primary_node_coords[i] = primary_node;
     
     // Calculate distance from reference point to primary node
-    Real distance = (_primary_node_coords[i] - _reference_point).norm();
+    Real distance = (_primary_node_coords[i] - reference_point).norm();
     distances[i] = distance;
     total_distance += distance;
   }
