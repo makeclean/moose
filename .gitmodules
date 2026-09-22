@@ -62,3 +62,6 @@
     url = ../../pytorch/pytorch.git
     update = none
     ignore = untracked
+[submodule "framework/contrib/xdg"]
+	path = framework/contrib/xdg
+	url = ../../xdg-org/xdg.git
