@@ -1,0 +1,32 @@
+[Tests]
+  issues = '#99999999'
+  design = 'GrayDiffuseRadiation.md VacuumRayViewFactorStudy.md VacuumRayViewFactor.md'
+
+  [convex_escape]
+    type = 'CSVDiff'
+    input = 'convex_escape.i'
+    csvdiff = 'convex_escape_out.csv'
+    requirement = 'The system shall compute radiative exchange between surfaces radiating into an open (vacuum) environment with view_factor_calculator = vacuum_ray_tracing, such that for a convex geometry all radiation escapes, the fixed temperature surface emits its black body flux sigma T^4, and adiabatic surfaces exchange no heat.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
+
+  [black_body_environment]
+    type = 'CSVDiff'
+    input = 'black_body_environment.i'
+    csvdiff = 'black_body_environment_out.csv'
+    requirement = 'The system shall allow open geometries to exchange radiation with a black body environment at a user-specified environment_temperature using view_factor_calculator = vacuum_ray_tracing and environment = black_body, such that a convex surface at temperature T loses flux sigma (T^4 - T_environment^4) and adiabatic surfaces equilibrate to the environment temperature.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
+
+  [open_box]
+    type = 'CSVDiff'
+    input = 'open_box.i'
+    csvdiff = 'open_box_out.csv'
+    rel_err = 1e-2 # gold values computed from an independent discrete replica of the ray tracing quadrature
+    requirement = 'The system shall compute mutual radiative exchange between the walls of an open (hollow) geometry by ray tracing with view_factor_calculator = vacuum_ray_tracing, including the escape fraction of radiation leaving through the opening, such that a heated wall heats the adiabatic walls to a temperature below the heated wall temperature.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
+[]

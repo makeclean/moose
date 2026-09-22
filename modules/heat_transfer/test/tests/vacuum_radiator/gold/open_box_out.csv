@@ -1,0 +1,3 @@
+time,heat_flux_density_inner_bottom,temperature_inner_front,temperature_inner_back,temperature_inner_left,temperature_inner_right,temperature_top
+0,0,0,0,0,0,0
+1,33266.403226398,840.26440866536,840.09779759555,840.24806032739,840.23225157583,0
