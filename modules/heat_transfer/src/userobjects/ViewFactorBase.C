@@ -176,7 +176,8 @@ ViewFactorBase::maxDevRowSum() const
   Real v = 0;
   for (unsigned int i = 0; i < _n_sides; ++i)
   {
-    Real s = std::abs(1 - viewFactorRowSum(i));
+    // the sum of the view factors and the escape fraction must equal one
+    Real s = std::abs(1 - viewFactorRowSum(i) - getEscapeFraction(boundaryIDs()[i]));
     if (s > v)
       v = s;
   }
@@ -200,7 +201,10 @@ ViewFactorBase::checkAndNormalizeViewFactor()
   if (_print_view_factor_info)
     for (unsigned int from = 0; from < _n_sides; ++from)
       _console << "View factors from sideset " << boundaryNames()[from] << " sum to "
-               << viewFactorRowSum(from) << std::endl;
+               << viewFactorRowSum(from) + getEscapeFraction(boundaryIDs()[from]) << " ("
+               << viewFactorRowSum(from) << " of which is a view factor, and "
+               << getEscapeFraction(boundaryIDs()[from]) << " is the escape fraction)."
+               << std::endl;
 
   if (max_sum_deviation > _view_factor_tol)
     mooseError("Maximum deviation of view factor row sum is ",

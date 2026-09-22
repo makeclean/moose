@@ -66,7 +66,7 @@ RadiationTransferAction::validParams()
   params.addRequiredParam<std::vector<FunctionName>>("emissivity",
                                                      "Emissivities for each boundary.");
 
-  MooseEnum view_factor_calculator("analytical ray_tracing", "ray_tracing");
+  MooseEnum view_factor_calculator("analytical ray_tracing vacuum_ray_tracing", "ray_tracing");
   params.addParam<MooseEnum>(
       "view_factor_calculator", view_factor_calculator, "The view factor calculator being used.");
 
@@ -100,13 +100,27 @@ RadiationTransferAction::validParams()
       "polar_quad_order",
       16,
       "Order of the polar quadrature [polar angle is between ray and normal]. Must be even. Only "
-      "used if view_factor_calculator = ray_tracing.");
+      "used if view_factor_calculator = ray_tracing or vacuum_ray_tracing.");
   params.addParam<unsigned int>(
       "azimuthal_quad_order",
       8,
       "Order of the azimuthal quadrature per quadrant [azimuthal angle is measured in "
       "a plane perpendicular to the normal]. Only used if view_factor_calculator = "
-      "ray_tracing.");
+      "ray_tracing or vacuum_ray_tracing.");
+
+  MooseEnum environment("vacuum black_body", "vacuum");
+  params.addParam<MooseEnum>(
+      "environment",
+      environment,
+      "The environment surrounding the surfaces. Only used for open (vacuum) geometries with "
+      "view_factor_calculator = vacuum_ray_tracing. 'vacuum' assumes a black body environment at "
+      "zero temperature, so the radiation that escapes the participating surfaces is lost. "
+      "'black_body' assumes a black body environment with the temperature given by "
+      "'environment_temperature'.");
+  params.addParam<FunctionName>(
+      "environment_temperature",
+      "The temperature of the black body environment. Only used if 'environment' is "
+      "'black_body'.");
 
   params.addParam<bool>("add_heat_flux_aux", false, "If true, add a heat flux aux variable");
   params.addParam<VariableName>(
@@ -126,7 +140,7 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
 {
   const auto & symmetry_names = getParam<std::vector<BoundaryName>>("symmetry_boundary");
 
-  if (_view_factor_calculator != "ray_tracing")
+  if (_view_factor_calculator == "analytical")
   {
     for (const auto & param_name : {"polar_quad_order",
                                     "azimuthal_quad_order",
@@ -136,11 +150,21 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
         paramWarning(param_name,
                      "Only used for view_factor_calculator = ray_tracing. It is ignored for this "
                      "calculation.");
+  }
 
+  if (_view_factor_calculator != "ray_tracing")
+  {
     if (symmetry_names.size())
       paramError("symmetry_boundary",
                  "Symmetry boundaries are only supported with view_factor_calculator = "
                  "ray_tracing.");
+
+#ifndef MOOSE_XDG_ENABLED
+    if (_view_factor_calculator == "vacuum_ray_tracing")
+      mooseError("The 'vacuum_ray_tracing' view factor calculator requires MOOSE to be configured "
+                 "with XDG support (./configure --with-xdg), which requires an Embree "
+                 "installation.");
+#endif
   }
   else
   {
@@ -152,6 +176,12 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
                    name,
                    " is present in parameter boundary and symmetry_boundary.");
   }
+
+  if (_view_factor_calculator == "vacuum_ray_tracing" && getParam<bool>("normalize_view_factor"))
+    paramError("normalize_view_factor",
+               "View factor normalization is not supported with view_factor_calculator = "
+               "vacuum_ray_tracing, because the radiation that escapes to the environment must not "
+               "be redistributed among the participating surfaces.");
 
   if (_add_heat_flux_aux)
   {
@@ -288,6 +318,17 @@ RadiationTransferAction::addViewFactorObject() const
     params.set<bool>("normalize_view_factor") = getParam<bool>("normalize_view_factor");
     _problem->addUserObject("RayTracingViewFactor", viewFactorObjectName(), params);
   }
+  else if (_view_factor_calculator == "vacuum_ray_tracing")
+  {
+    // this branch adds the vacuum ray tracing UO for open geometries; normalization
+    // is not supported and the default of the object is used instead
+    InputParameters params = _factory.getValidParams("VacuumRayViewFactor");
+    params.set<std::vector<BoundaryName>>("boundary") = radiationPatchBoundaryNames();
+    params.set<ExecFlagEnum>("execute_on") = exec_enum;
+    params.set<UserObjectName>("ray_study_name") = rayStudyName();
+    params.set<bool>("print_view_factor_info") = getParam<bool>("print_view_factor_info");
+    _problem->addUserObject("VacuumRayViewFactor", viewFactorObjectName(), params);
+  }
 }
 
 void
@@ -296,7 +337,10 @@ RadiationTransferAction::addRayStudyObject() const
   if (_view_factor_calculator == "analytical")
     return;
 
-  InputParameters params = _factory.getValidParams("ViewFactorRayStudy");
+  const std::string study_type = _view_factor_calculator == "vacuum_ray_tracing"
+                                     ? "VacuumRayViewFactorStudy"
+                                     : "ViewFactorRayStudy";
+  InputParameters params = _factory.getValidParams(study_type);
 
   params.set<std::vector<BoundaryName>>("boundary") = radiationPatchBoundaryNames();
 
@@ -312,13 +356,13 @@ RadiationTransferAction::addRayStudyObject() const
   // set angular quadrature
   params.set<unsigned int>("polar_quad_order") = getParam<unsigned int>("polar_quad_order");
   params.set<unsigned int>("azimuthal_quad_order") = getParam<unsigned int>("azimuthal_quad_order");
-  _problem->addUserObject("ViewFactorRayStudy", rayStudyName(), params);
+  _problem->addUserObject(study_type, rayStudyName(), params);
 }
 
 void
 RadiationTransferAction::addRayBCs() const
 {
-  if (_view_factor_calculator == "analytical")
+  if (_view_factor_calculator != "ray_tracing")
     return;
 
   {
@@ -438,6 +482,13 @@ RadiationTransferAction::addRadiationObject() const
   // the view factor userobject name
   params.set<UserObjectName>("view_factor_object_name") = viewFactorObjectName();
 
+  // the environment parameters, used for open (vacuum) geometries
+  if (isParamSetByUser("environment"))
+    params.set<MooseEnum>("environment") = getParam<MooseEnum>("environment");
+  if (isParamSetByUser("environment_temperature"))
+    params.set<FunctionName>("environment_temperature") =
+        getParam<FunctionName>("environment_temperature");
+
   // this userobject needs to be executed on linear and timestep end
   ExecFlagEnum exec_enum = MooseUtils::getDefaultExecFlagEnum();
   exec_enum = {EXEC_LINEAR, EXEC_TIMESTEP_END};
@@ -450,6 +501,15 @@ RadiationTransferAction::addRadiationObject() const
 std::vector<std::vector<std::string>>
 RadiationTransferAction::radiationPatchNames() const
 {
+  // the vacuum calculation does not split the surfaces into patches
+  if (_view_factor_calculator == "vacuum_ray_tracing")
+  {
+    std::vector<std::vector<std::string>> names(_boundary_names.size());
+    for (const auto j : index_range(_boundary_names))
+      names[j] = {_boundary_names[j]};
+    return names;
+  }
+
   std::vector<std::vector<std::string>> radiation_patch_names(_boundary_names.size());
   std::vector<BoundaryID> boundary_ids = _mesh->getBoundaryIDs(_boundary_names);
   for (unsigned int j = 0; j < boundary_ids.size(); ++j)
@@ -486,6 +546,13 @@ RadiationTransferAction::bcRadiationPatchNames() const
     if (it_a != ad_bnd_names.end() || it_t != ft_bnd_names.end())
       continue;
 
+    // the vacuum calculation does not split the surfaces into patches
+    if (_view_factor_calculator == "vacuum_ray_tracing")
+    {
+      radiation_patch_names.emplace_back(1, bnd_name);
+      continue;
+    }
+
     std::string base_name = _mesh->getBoundaryName(bid);
     std::vector<std::string> bnames;
     for (unsigned int i = 0; i < nPatch(j); ++i)
@@ -503,6 +570,10 @@ std::vector<BoundaryName>
 RadiationTransferAction::patchBoundaryNames(
     const std::vector<BoundaryName> & boundary_names_or_ids) const
 {
+  // the vacuum calculation does not split the surfaces into patches
+  if (_view_factor_calculator == "vacuum_ray_tracing")
+    return boundary_names_or_ids;
+
   std::vector<BoundaryName> patch_boundary_names;
   std::vector<BoundaryID> ids = _mesh->getBoundaryIDs(boundary_names_or_ids);
   for (const auto i : index_range(boundary_names_or_ids))
@@ -543,6 +614,24 @@ void
 RadiationTransferAction::addMeshGenerator()
 {
   std::vector<unsigned int> n_patches = getParam<std::vector<unsigned int>>("n_patches");
+
+  // the vacuum (open geometry) calculation treats each sideset as a single
+  // surface, so no patch mesh generators are added
+  if (_view_factor_calculator == "vacuum_ray_tracing")
+  {
+    if (_boundary_names.size() != n_patches.size())
+      mooseError("n_patches parameter must have same length as boundary parameter.");
+    for (const auto j : index_range(n_patches))
+      if (n_patches[j] != 1)
+        mooseError("n_patches (",
+                   n_patches[j],
+                   ") for boundary ",
+                   _boundary_names[j],
+                   " must be 1 when using view_factor_calculator = vacuum_ray_tracing, because "
+                   "each sideset is a single surface rather than a set of patches.");
+    return;
+  }
+
   MultiMooseEnum partitioners = getParam<MultiMooseEnum>("partitioners");
   if (!_pars.isParamSetByUser("partitioners"))
   {
@@ -589,6 +678,10 @@ RadiationTransferAction::addMeshGenerator()
 unsigned int
 RadiationTransferAction::nPatch(unsigned int j) const
 {
+  // the vacuum calculation does not split the surfaces into patches
+  if (_view_factor_calculator == "vacuum_ray_tracing")
+    return 1;
+
   const MeshGenerator * mg = &_app.getMeshGenerator(meshGeneratorName(j));
   const PatchSidesetGenerator * psg = dynamic_cast<const PatchSidesetGenerator *>(mg);
   if (!psg)

@@ -35,6 +35,10 @@ public:
   Real getViewFactor(BoundaryName from_name, BoundaryName to_name) const;
   ///@}
 
+  /// The fraction of radiation leaving this boundary that escapes to the environment.
+  /// The default is zero for closed geometries; open geometries override this.
+  virtual Real getEscapeFraction(BoundaryID /*id*/) const { return 0; }
+
   virtual void initialize() override;
   virtual void execute() override;
   virtual void finalize() override final;

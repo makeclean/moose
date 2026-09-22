@@ -27,4 +27,6 @@ public:
 
 protected:
   virtual std::vector<std::vector<Real>> setViewFactors() override;
+
+  virtual std::vector<Real> setEscapeFractions() override;
 };

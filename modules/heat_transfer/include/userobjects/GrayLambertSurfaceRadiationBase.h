@@ -10,6 +10,7 @@
 #pragma once
 
 #include "SideUserObject.h"
+#include "MooseEnum.h"
 
 // Forward Declarations
 class Function;
@@ -54,6 +55,9 @@ protected:
   /// a purely virtual function that defines where view factors come from
   virtual std::vector<std::vector<Real>> setViewFactors() = 0;
 
+  /// returns the fraction of radiation that escapes each surface to the environment
+  virtual std::vector<Real> setEscapeFractions();
+
   /// Gets the index within \c _side_id_index of the given boundary ID
   unsigned int getSideIDIndex(BoundaryID id) const;
 
@@ -92,6 +96,15 @@ protected:
 
   /// the irradiation into each surface
   std::vector<Real> _surface_irradiation;
+
+  /// the fraction of radiation that escapes from each surface to the environment
+  std::vector<Real> _escape_fractions;
+
+  /// the ambient environment of the surfaces
+  const MooseEnum _environment;
+
+  /// the temperature of the environment if it is a black body
+  const Function * _environment_temperature;
 
   /// constant emissivity for each boundary
   std::vector<const Function *> _emissivity;

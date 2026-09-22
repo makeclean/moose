@@ -34,6 +34,19 @@ GrayLambertSurfaceRadiationBase::validParams()
   params.addParam<std::vector<BoundaryName>>(
       "adiabatic_boundary", {}, "The list of boundary IDs from the mesh that are adiabatic.");
 
+  MooseEnum environment("vacuum black_body", "vacuum");
+  params.addParam<MooseEnum>(
+      "environment",
+      environment,
+      "The environment surrounding the surfaces. 'vacuum' assumes a black body environment at "
+      "zero temperature, so radiation that escapes the participating surfaces is lost. "
+      "'black_body' "
+      "assumes a black body environment with the temperature given by 'environment_temperature'.");
+  params.addParam<FunctionName>(
+      "environment_temperature",
+      "The temperature of the black body environment. Only used if 'environment' is "
+      "'black_body'.");
+
   params.addClassDescription(
       "This object implements the exchange of heat by radiation between sidesets.");
   return params;
@@ -50,7 +63,12 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
     _side_type(_n_sides),
     _areas(_n_sides),
     _beta(_n_sides),
-    _surface_irradiation(_n_sides)
+    _surface_irradiation(_n_sides),
+    _escape_fractions(_n_sides, 0),
+    _environment(getParam<MooseEnum>("environment")),
+    _environment_temperature(isParamSetByUser("environment_temperature")
+                                 ? &getFunctionByName("environment_temperature")
+                                 : nullptr)
 {
   // get emissivity functions
   auto & eps_names = getParam<std::vector<FunctionName>>("emissivity");
@@ -141,6 +159,12 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
       if (_fixed_side_id_index.find(id) != _fixed_side_id_index.end())
         paramError("adiabatic_boundary", "Isothermal boundary cannot also be adiabatic boundary.");
   }
+
+  // check that the environment parameters are consistent
+  if (_environment == "black_body" && !_environment_temperature)
+    paramError("environment_temperature",
+               "The 'environment_temperature' function must be provided if 'environment' is "
+               "'black_body'.");
 }
 
 void
@@ -177,6 +201,7 @@ GrayLambertSurfaceRadiationBase::initialize()
   // view factors are obtained here to make sure that another object had
   // time to compute them on exec initial
   _view_factors = setViewFactors();
+  _escape_fractions = setEscapeFractions();
 
   // initialize areas, beta, side temps
   for (unsigned int j = 0; j < _n_sides; ++j)
@@ -202,6 +227,13 @@ GrayLambertSurfaceRadiationBase::finalize()
     _side_temperature[j] /= _areas[j];
   }
 
+  // black body radiation of the environment surrounding the surfaces
+  const Real environment_black_body =
+      _environment == "black_body"
+          ? _sigma_stefan_boltzmann *
+                MathUtils::pow(_environment_temperature->value(_t, Point()), 4)
+          : 0;
+
   // matrix and rhs vector for the view factor calculation
   DenseMatrix<Real> matrix(_n_sides, _n_sides);
   DenseVector<Real> rhs(_n_sides);
@@ -209,6 +241,13 @@ GrayLambertSurfaceRadiationBase::finalize()
   for (unsigned int i = 0; i < _n_sides; ++i)
   {
     rhs(i) = _beta[i];
+    // radiation that escapes to the environment is re-emitted according to its
+    // reflectivity (or fully absorbed and balanced for adiabatic surfaces)
+    if (_side_type[i] == ADIABATIC)
+      rhs(i) += _escape_fractions[i] * environment_black_body;
+    else
+      rhs(i) += (1 - _emissivity[i]->value(_side_temperature[i], Point())) * _escape_fractions[i] *
+                environment_black_body;
     matrix(i, i) = 1;
     for (unsigned int j = 0; j < _n_sides; ++j)
     {
@@ -234,6 +273,7 @@ GrayLambertSurfaceRadiationBase::finalize()
     _heat_flux_density[i] = radiosity(i);
     for (unsigned int j = 0; j < _n_sides; ++j)
       _heat_flux_density[i] -= _view_factors[i][j] * radiosity(j);
+    _heat_flux_density[i] -= _escape_fractions[i] * environment_black_body;
 
     if (_side_type[i] == ADIABATIC)
     {
@@ -246,7 +286,15 @@ GrayLambertSurfaceRadiationBase::finalize()
     _surface_irradiation[i] = 0;
     for (unsigned int j = 0; j < _n_sides; ++j)
       _surface_irradiation[i] += _view_factors[i][j] * radiosity(j);
+    _surface_irradiation[i] += _escape_fractions[i] * environment_black_body;
   }
+}
+
+std::vector<Real>
+GrayLambertSurfaceRadiationBase::setEscapeFractions()
+{
+  // by default, no radiation escapes to the environment (closed geometries)
+  return std::vector<Real>(_n_sides, 0);
 }
 
 void

@@ -46,3 +46,14 @@ ViewFactorObjectSurfaceRadiation::setViewFactors()
   }
   return vf;
 }
+
+std::vector<Real>
+ViewFactorObjectSurfaceRadiation::setEscapeFractions()
+{
+  const ViewFactorBase & view_factor_uo = getUserObject<ViewFactorBase>("view_factor_object_name");
+  std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
+  std::vector<Real> esc(_n_sides, 0);
+  for (unsigned int i = 0; i < _n_sides; ++i)
+    esc[i] = view_factor_uo.getEscapeFraction(_mesh.getBoundaryID(boundary_names[i]));
+  return esc;
+}
