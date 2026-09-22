@@ -13,9 +13,10 @@ endif
 
 # We ignore this in the contrib folder because we will set up the include
 # directories manually later
-IGNORE_CONTRIB_INC ?= libtorch mfem neml2 kokkos
+IGNORE_CONTRIB_INC ?= libtorch mfem neml2 kokkos xdg
 ENABLE_LIBTORCH ?= false
 ENABLE_MFEM ?= false
+ENABLE_XDG ?= false
 ENABLE_KOKKOS ?= false
 ENABLE_KOKKOS_GPU ?= true
 
@@ -177,6 +178,31 @@ ifeq ($(ENABLE_MFEM),true)
       $(error ERROR! Cannot locate libmfem-$(METHOD) and libmfem-common-$(METHOD). Make sure to install mfem before compiling MOOSE!)
     else
       $(info Skipping libmfem error check for targets that don't involve compilation!)
+    endif
+  endif
+endif
+
+#
+# Conditional parts if the user wants to compile MOOSE with xdg
+#
+ifeq ($(ENABLE_XDG),true)
+  XDG_LIB := libxdg.$(lib_suffix)
+
+  ifneq ($(wildcard $(XDG_DIR)/lib/$(XDG_LIB)),)
+    # Adding the include directories
+    libmesh_CPPFLAGS += -I$(XDG_DIR)/include
+
+    # Dynamically linking with the available XDG library
+    libmesh_LDFLAGS += -Wl,-rpath,$(XDG_DIR)/lib -L$(XDG_DIR)/lib -lxdg
+
+  else
+    # No xdg library found
+    $(eval $(call check_library_should_error,xdg))
+
+    ifeq ($(xdg_should_error),true)
+      $(error ERROR! Cannot locate libxdg.$(lib_suffix). Make sure to install xdg before compiling MOOSE!)
+    else
+      $(info Skipping libxdg error check for targets that don't involve compilation!)
     endif
   endif
 endif

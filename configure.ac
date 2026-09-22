@@ -80,6 +80,28 @@ AS_IF([test "$mfem_support" = yes],
         AC_MSG_RESULT([MFEM library path: $mfem_library])
       ])
 
+AC_ARG_WITH(xdg,
+            AS_HELP_STRING([--with-xdg@<:@=ARG@:>@],[Specify if xdg support should be enabled @<:@ARG=yes or xdg directory@:>@]),
+            [xdg_support=yes xdg_library="$withval"],
+            [xdg_support=no])
+
+AC_MSG_RESULT([configuring with xdg support: $xdg_support])
+
+AS_IF([test "$xdg_support" = yes],
+      [
+        AC_DEFINE(XDG_ENABLED, 1, [Whether to use xdg-related code or not])
+        AC_SUBST([xdg_support],[true])
+        AS_IF([test "$xdg_library" = yes],
+              [
+                    AS_IF([test "${XDG_DIR+set}" = set],
+                          [xdg_library="${XDG_DIR}"],
+                          [xdg_library="$ac_pwd/framework/contrib/xdg/installed"])
+              ])
+        AC_DEFINE_UNQUOTED(XDG_DIR, [$xdg_library], [The directory where xdg is installed])
+        AC_SUBST([xdg_library])
+        AC_MSG_RESULT([XDG library path: $xdg_library])
+      ])
+
 AC_ARG_WITH(neml2,
             AS_HELP_STRING([--with-neml2@<:@=ARG@:>@],[Specify if neml2 support should be enabled @<:@ARG=yes or neml2 directory@:>@]),
             [neml2_support=yes neml2_library="$withval"],

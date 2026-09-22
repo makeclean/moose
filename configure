@@ -620,6 +620,8 @@ neml2_library
 neml2_support
 mfem_library
 mfem_support
+xdg_library
+xdg_support
 libtorch_library
 libtorch_support
 target_alias
@@ -667,6 +669,7 @@ enable_option_checking
 with_derivative_size
 with_libtorch
 with_mfem
+with_xdg
 with_neml2
 with_kokkos
 with_kokkos_index_size
@@ -1297,6 +1300,8 @@ Optional Packages:
                           [ARG=yes or libtorch directory]
   --with-mfem[=ARG]       Specify if mfem support should be enabled [ARG=yes
                           or mfem directory]
+  --with-xdg[=ARG]        Specify if xdg support should be enabled [ARG=yes
+                          or xdg directory]
   --with-neml2[=ARG]      Specify if neml2 support should be enabled [ARG=yes
                           or neml2 directory]
   --with-kokkos[=ARG]     Specify if Kokkos support should be enabled [ARG=yes
@@ -1881,6 +1886,49 @@ printf "%s\n" "#define MFEM_DIR $mfem_library" >>confdefs.h
 
         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: MFEM library path: $mfem_library" >&5
 printf "%s\n" "MFEM library path: $mfem_library" >&6; }
+
+fi
+
+
+# Check whether --with-xdg was given.
+if test ${with_xdg+y}
+then :
+  withval=$with_xdg; xdg_support=yes xdg_library="$withval"
+else case e in #(
+  e) xdg_support=no ;;
+esac
+fi
+
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: configuring with xdg support: $xdg_support" >&5
+printf "%s\n" "configuring with xdg support: $xdg_support" >&6; }
+
+if test "$xdg_support" = yes
+then :
+
+
+printf "%s\n" "#define XDG_ENABLED 1" >>confdefs.h
+
+        xdg_support=true
+
+        if test "$xdg_library" = yes
+then :
+
+                    if test "${XDG_DIR+set}" = set
+then :
+  xdg_library="${XDG_DIR}"
+else case e in #(
+  e) xdg_library="$ac_pwd/framework/contrib/xdg/installed" ;;
+esac
+fi
+
+fi
+
+printf "%s\n" "#define XDG_DIR $xdg_library" >>confdefs.h
+
+
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: XDG library path: $xdg_library" >&5
+printf "%s\n" "XDG library path: $xdg_library" >&6; }
 
 fi
 

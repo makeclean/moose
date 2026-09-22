@@ -196,6 +196,19 @@ Capabilities::registerMooseCapabilities()
   }
 
   {
+    const auto doc = "XDG ray tracing library for open geometry";
+#ifdef MOOSE_XDG_ENABLED
+    have("xdg", doc);
+#else
+    missing("xdg",
+            doc,
+            "Install xdg using the scripts/update_and_rebuild_xdg.sh script (which "
+            "also requires an Embree install), then configure moose with "
+            "./configure --with-xdg");
+#endif
+  }
+
+  {
     const auto doc = "New Engineering Material model Library, version 2";
 #ifdef NEML2_ENABLED
     have("neml2", doc);

@@ -30,6 +30,12 @@
 /* Define to specify Kokkos default array and thread index type */
 #undef KOKKOS_INDEX_TYPE
 
+/* The directory where xdg is installed */
+#undef XDG_DIR
+
+/* Whether to use xdg-related code or not */
+#undef XDG_ENABLED
+
 /* Define to the address where bug reports for this package should be sent. */
 #undef PACKAGE_BUGREPORT
 
