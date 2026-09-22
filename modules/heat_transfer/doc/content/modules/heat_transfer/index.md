@@ -139,6 +139,37 @@ where $A_i$ is the area of surface $i$.
 
 This method is implemented in the [syntax/GrayDiffuseRadiation/index.md].
 
+### Open Geometries and the Escape Fraction id=escape_fraction
+
+The net radiation method in [eq:second_balance] assumes that the surfaces completely
+enclose the medium: every ray of radiation leaving a surface is intercepted by
+another surface. If the surfaces form an open geometry instead, part of the
+radiation leaves the geometry, and the row sum of the view factors is no longer
+one. The radiation that leaves is accounted for by an escape fraction $e_i$ for
+each surface $i$,
+
+\begin{equation}\label{eq:escape_fraction}
+  \sum_{j=1}^n F_{i,j} = 1 - e_i,
+\end{equation}
+
+where $F_{i,j}$ are the view factors among the surfaces. The irradiation balance in
+[eq:second_balance] then also contains the radiation arriving from the
+environment,
+
+\begin{equation}\label{eq:second_balance_open}
+  H_i = \sum_{j=1}^n F_{i,j} J_j + e_i B_{\text{env}},
+\end{equation}
+
+where $B_{\text{env}}$ is the black body emission of the environment: $B_{\text{env}} = 0$ for
+a vacuum, and $B_{\text{env}} = \sigma T_{\text{env}}^4$ for a black body environment at a
+temperature $T_{\text{env}}$ specified by the user.
+
+The escape fractions and view factors between the surfaces of an open geometry are
+computed by ray tracing with the XDG library, which ray traces through the void
+surrounding the surfaces; see
+[VacuumRayViewFactor.md] and the
+[syntax/GrayDiffuseRadiation/index.md] documentation.
+
 ### Relationship of Net Radiation Method with Radiative Transport
 
 The radiative transport equation is formulated in terms of the spectral intensity $I(\vec{x}, t, \lambda, \hat{\Omega})$ with $\lambda$ being the photon's wavelength and $\hat{\Omega}$ being the direction

@@ -42,12 +42,32 @@ the use of [UnobstructedPlanarViewFactor.md]; at this point this is maintained a
 The [!param](/GrayDiffuseRadiation/ray_tracing_face_order) parameter is important because it controls the accuracy of the view factor computation.
 The raytracing computation uses the `QGRID` quadrature available in libMesh which places quadrature points at uniform distances on the from and to boundary faces. Increasing the [!param](/GrayDiffuseRadiation/ray_tracing_face_order) increases the accuracy of the view factors. Note, that mesh refinement also enhances the accuracy of view factors, but at the expense of more elements being crossed during the raytracing procedure. Uniformly increasing the number of quadrature points using [!param](/GrayDiffuseRadiation/ray_tracing_face_order) is essentially equivalent to selectively refining the mesh on the faces in radiative transfer.
 
+## Open Geometries and the Environment id=open_geometries
+
+If the surfaces do not enclose a cavity, part of the radiation leaves the geometry. In this case, set
+[!param](/GrayDiffuseRadiation/view_factor_calculator) to `vacuum_ray_tracing` to compute the view factors with
+[VacuumRayViewFactor.md], which uses the XDG library through a [VacuumRayViewFactorStudy.md] to ray trace through the
+void surrounding the surfaces. Each surface then has an escape fraction $e_i$ that accounts for the radiation leaving
+the geometry, which is used by [GrayLambertSurfaceRadiationBase.md] to close the energy balance.
+
+The environment into which the radiation escapes is controlled by the [!param](/GrayDiffuseRadiation/environment)
+parameter. With the default `vacuum`, the environment does not emit radiation back onto the surfaces. With `black_body`,
+the environment is a black body at the temperature given by the function
+[!param](/GrayDiffuseRadiation/environment_temperature), and the radiation
+$\sigma T_{\text{env}}^4$ arrives at the surfaces according to their escape fractions.
+
+The vacuum ray tracing calculation applies to three-dimensional problems on serial replicated meshes, and every
+surface bordering the void must be listed in the [!param](/GrayDiffuseRadiation/boundary) parameter. Patches are not
+supported: the [!param](/GrayDiffuseRadiation/n_patches) values must all be one, and each surface in radiative exchange
+is a single surface.
+
 ## Implementation
 
 The following tasks are performed by this syntax/action:
 
 - New sidesets are created with [PatchSidesetGenerator.md], corresponding to the numbers of
-  patches specified by [!param](/GrayDiffuseRadiation/n_patches).
+  patches specified by [!param](/GrayDiffuseRadiation/n_patches). This step is skipped if
+  [!param](/GrayDiffuseRadiation/view_factor_calculator) is `vacuum_ray_tracing`, which requires $n_{\text{patches}} = 1$.
 - A [GrayLambertSurfaceRadiationBase.md] object is created.
 - [GrayLambertNeumannBC.md] objects are created for boundaries requiring BC.
 - A [UnobstructedPlanarViewFactor.md] ([!param](/GrayDiffuseRadiation/view_factor_calculator) is `analytical`)
@@ -55,6 +75,8 @@ The following tasks are performed by this syntax/action:
   object is created to compute view factors.
 - A [ViewFactorRayStudy.md] is created if [!param](/GrayDiffuseRadiation/view_factor_calculator) is `ray_tracing`.
 - [ViewFactorRayBC.md] and [ReflectRayBC.md] objects are created if [!param](/GrayDiffuseRadiation/view_factor_calculator) is `ray_tracing`.
+- A [VacuumRayViewFactor.md] and a [VacuumRayViewFactorStudy.md] object are created to compute view factors and escape
+  fractions if [!param](/GrayDiffuseRadiation/view_factor_calculator) is `vacuum_ray_tracing`.
 - A CONSTANT MONOMIAL aux variable is created with a [GrayLambertRadiationHeatFluxAux.md] aux kernel
   if [!param](/GrayDiffuseRadiation/add_heat_flux_aux) is true.
 
