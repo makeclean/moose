@@ -37,7 +37,9 @@ if [ -n "$help" ]; then
   echo "--skip-submodule-update  Do not update the XDG submodule, use the current version"
   echo
   echo "Influential variables"
-  echo "EMBREE_DIR               Path to an Embree (v4) install; default: /opt/embree"
+  echo "XDG_DEPS_DIR             Root directory for auto-built XDG dependencies; default: <moose>/framework/contrib/xdg-deps"
+  echo "TBB_DIR                  Path to an oneTBB install; default: \$XDG_DEPS_DIR/oneTBB (built from source if missing)"
+  echo "EMBREE_DIR               Path to an Embree (v4) install; default: \$XDG_DEPS_DIR/embree (built from source if missing)"
   echo "LIBMESH_DIR              Path to libmesh (for libmesh.pc); default: ../libmesh/installed"
   echo "METHOD                   libMesh build method used to pick libmesh.pc; default: \$METHOD or opt"
   echo "XDG_DIR                  XDG install prefix; default: ../framework/contrib/xdg/installed"
@@ -53,6 +55,86 @@ fi
 
 set -e
 
+# Pinned versions for the auto-built dependencies. oneTBB v2023.0.0 is the
+# release line Embree 4.4 was validated against; Embree v4.4.1 is the newest
+# 4.x release and satisfies the widened [4.0.0, 5.0.0) range in XDG's
+# CMakeLists.txt.
+ONE_TBB_VERSION=v2023.0.0
+EMBREE_VERSION=v4.4.1
+
+# Build and install oneTBB (second-order XDG dependency: Embree's tasking
+# library) into TBB_DIR; skipped if an install is already present there.
+build_oneTBB() {
+  if [ -d "$TBB_DIR/lib" ] || [ -d "$TBB_DIR/lib64" ]; then
+    echo "INFO: Using existing oneTBB install at $TBB_DIR"
+    return 0
+  fi
+
+  echo "INFO: Building oneTBB $ONE_TBB_VERSION into $TBB_DIR"
+  local src="$XDG_DEPS_DIR/src/oneTBB"
+  local bld="$XDG_DEPS_DIR/bld/oneTBB"
+  if [ ! -d "$src" ]; then
+    mkdir -p "$XDG_DEPS_DIR/src"
+    git clone --depth 1 --branch "$ONE_TBB_VERSION" https://github.com/uxlfoundation/oneTBB "$src"
+  fi
+  rm -rf "$bld"
+  mkdir -p "$bld"
+  cd "$bld"
+  cmake "$src" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$TBB_DIR" \
+    -DTBB_TEST=OFF
+  make -j ${MOOSE_JOBS:-4} install
+  cd "$SCRIPT_DIR"
+}
+
+# Build and install Embree (first-order XDG dependency: the ray tracing
+# backend) into EMBREE_DIR, linked against the oneTBB above; skipped if an
+# install is already present there.
+build_embree() {
+  if [ -d "$EMBREE_DIR/lib" ] || [ -d "$EMBREE_DIR/lib64" ]; then
+    echo "INFO: Using existing Embree install at $EMBREE_DIR"
+    return 0
+  fi
+
+  echo "INFO: Building Embree $EMBREE_VERSION into $EMBREE_DIR"
+  local src="$XDG_DEPS_DIR/src/embree"
+  local bld="$XDG_DEPS_DIR/bld/embree"
+  if [ ! -d "$src" ]; then
+    mkdir -p "$XDG_DEPS_DIR/src"
+    git clone --depth 1 --branch "$EMBREE_VERSION" https://github.com/embree/embree "$src"
+  fi
+
+  # oneTBB installs into lib64 on some platforms and lib on others
+  local tbb_lib
+  for d in "$TBB_DIR/lib" "$TBB_DIR/lib64"; do
+    if [ -d "$d" ]; then
+      tbb_lib="$d"
+      break
+    fi
+  done
+  if [ -z "$tbb_lib" ]; then
+    echo "Error: Could not find a oneTBB library directory under $TBB_DIR."
+    exit 1
+  fi
+
+  rm -rf "$bld"
+  mkdir -p "$bld"
+  cd "$bld"
+  # EMBREE_TBB_ROOT steers Embree's TBB discovery at the oneTBB above (config
+  # mode, with a module-mode fallback), and CMAKE_INSTALL_RPATH lets libembree
+  # find libtbb at runtime without LD_LIBRARY_PATH.
+  cmake "$src" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$EMBREE_DIR" \
+    -DEMBREE_TBB_ROOT="$TBB_DIR" \
+    -DEMBREE_ISPC_SUPPORT=OFF \
+    -DEMBREE_TUTORIALS=OFF \
+    -DCMAKE_INSTALL_RPATH="$tbb_lib"
+  make -j ${MOOSE_JOBS:-4} install
+  cd "$SCRIPT_DIR"
+}
+
 if [ -n "$XDG_SRC_DIR" ]; then
   skip_sub_update=1
 else
@@ -67,14 +149,16 @@ else
   rm -rf "$XDG_DIR"
 fi
 
-# Embree is a runtime dependency of the XDG ray tracer and is not bundled with
-# XDG or MOOSE, so an existing install is required
-: ${EMBREE_DIR:=/opt/embree}
-if [ ! -d "$EMBREE_DIR" ]; then
-  echo "Error: Could not find an Embree install at \$EMBREE_DIR=$EMBREE_DIR."
-  echo "Install Embree v4 (e.g. 4.4.1) and pass its prefix via EMBREE_DIR."
-  exit 1
-fi
+# XDG's dependency chain is XDG -> Embree -> oneTBB; neither Embree nor
+# oneTBB is bundled with XDG or MOOSE, so each missing level is built from
+# source and installed under XDG_DEPS_DIR unless an existing install is
+# provided via TBB_DIR / EMBREE_DIR.
+: ${XDG_DEPS_DIR:=$(realpath -m "${SCRIPT_DIR}/../framework/contrib/xdg-deps/.")}
+: ${TBB_DIR:="${XDG_DEPS_DIR}/oneTBB"}
+: ${EMBREE_DIR:="${XDG_DEPS_DIR}/embree"}
+
+build_oneTBB
+build_embree
 
 : ${LIBMESH_DIR:=$(realpath "${SCRIPT_DIR}/../libmesh/installed/.")}
 if [ ! -d "$LIBMESH_DIR/lib/pkgconfig" ]; then
