@@ -80,11 +80,11 @@ build_oneTBB() {
   rm -rf "$bld"
   mkdir -p "$bld"
   cd "$bld"
+  # Force lib/ so the layout is identical on every platform
+  # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
   cmake "$src" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$TBB_DIR" \
-    # Force lib/ so the layout is identical on every platform
-    # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DTBB_TEST=OFF
   make -j ${MOOSE_JOBS:-4} install
@@ -127,11 +127,11 @@ build_embree() {
   # EMBREE_TBB_ROOT steers Embree's TBB discovery at the oneTBB above (config
   # mode, with a module-mode fallback), and CMAKE_INSTALL_RPATH lets libembree
   # find libtbb at runtime without LD_LIBRARY_PATH.
+  # Force lib/ so the layout is identical on every platform
+  # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
   cmake "$src" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$EMBREE_DIR" \
-    # Force lib/ so the layout is identical on every platform
-    # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DEMBREE_TBB_ROOT="$TBB_DIR" \
     -DEMBREE_ISPC_SUPPORT=OFF \
@@ -192,13 +192,13 @@ if [ -z "$go_fast" ]; then
   mkdir -p "$XDG_BUILD_DIR_BASE"
   cd "$XDG_BUILD_DIR_BASE"
 
+  # MOOSE (moose.mk) looks for libxdg.so under $(XDG_DIR)/lib;
+  # GNUInstallDirs defaults to lib64 on RHEL-based systems
   PKG_CONFIG_PATH="$LIBMESH_DIR/lib/pkgconfig" \
   METHOD="$METHOD" \
   cmake "$XDG_SRC_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$XDG_DIR" \
-    # MOOSE (moose.mk) looks for libxdg.so under $(XDG_DIR)/lib;
-    # GNUInstallDirs defaults to lib64 on RHEL-based systems
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_PREFIX_PATH="$EMBREE_DIR" \
     -DXDG_BUILD_TESTS=OFF \
