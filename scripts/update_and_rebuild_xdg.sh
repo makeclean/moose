@@ -83,6 +83,9 @@ build_oneTBB() {
   cmake "$src" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$TBB_DIR" \
+    # Force lib/ so the layout is identical on every platform
+    # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DTBB_TEST=OFF
   make -j ${MOOSE_JOBS:-4} install
   cd "$SCRIPT_DIR"
@@ -127,6 +130,9 @@ build_embree() {
   cmake "$src" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$EMBREE_DIR" \
+    # Force lib/ so the layout is identical on every platform
+    # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DEMBREE_TBB_ROOT="$TBB_DIR" \
     -DEMBREE_ISPC_SUPPORT=OFF \
     -DEMBREE_TUTORIALS=OFF \
@@ -191,6 +197,9 @@ if [ -z "$go_fast" ]; then
   cmake "$XDG_SRC_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$XDG_DIR" \
+    # MOOSE (moose.mk) looks for libxdg.so under $(XDG_DIR)/lib;
+    # GNUInstallDirs defaults to lib64 on RHEL-based systems
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_PREFIX_PATH="$EMBREE_DIR" \
     -DXDG_BUILD_TESTS=OFF \
     -DXDG_BUILD_TOOLS=OFF \
