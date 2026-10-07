@@ -108,37 +108,46 @@ build_embree() {
     git clone --depth 1 --branch "$EMBREE_VERSION" https://github.com/embree/embree "$src"
   fi
 
-  # oneTBB installs into lib64 on some platforms and lib on others
-  local tbb_lib
-  for d in "$TBB_DIR/lib" "$TBB_DIR/lib64"; do
-    if [ -d "$d" ]; then
-      tbb_lib="$d"
-      break
-    fi
-  done
-  if [ -z "$tbb_lib" ]; then
-    echo "Error: Could not find a oneTBB library directory under $TBB_DIR."
-    exit 1
-  fi
-
   rm -rf "$bld"
   mkdir -p "$bld"
   cd "$bld"
   # EMBREE_TBB_ROOT steers Embree's TBB discovery at the oneTBB above (config
-  # mode, with a module-mode fallback), and CMAKE_INSTALL_RPATH lets libembree
-  # find libtbb at runtime without LD_LIBRARY_PATH.
-  # Force lib/ so the layout is identical on every platform
-  # (GNUInstallDirs defaults to lib64 on RHEL-based systems)
+  # mode, with a module-mode fallback). Force lib/ so the layout is identical
+  # on every platform (GNUInstallDirs defaults to lib64 on RHEL-based systems)
   cmake "$src" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$EMBREE_DIR" \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DEMBREE_TBB_ROOT="$TBB_DIR" \
     -DEMBREE_ISPC_SUPPORT=OFF \
-    -DEMBREE_TUTORIALS=OFF \
-    -DCMAKE_INSTALL_RPATH="$tbb_lib"
+    -DEMBREE_TUTORIALS=OFF
   make -j ${MOOSE_JOBS:-4} install
   cd "$SCRIPT_DIR"
+
+  # Embree sets the installed library's RUNPATH to $ORIGIN, expecting libtbb
+  # to sit in the same install folder; symlink it in so libembree finds
+  # oneTBB at runtime without LD_LIBRARY_PATH
+  local embree_lib tbb_lib
+  for d in "$EMBREE_DIR/lib" "$EMBREE_DIR/lib64"; do
+    if [ -d "$d" ]; then
+      embree_lib="$d"
+      break
+    fi
+  done
+  # oneTBB installs into lib64 on some platforms and lib on others
+  for d in "$TBB_DIR/lib" "$TBB_DIR/lib64"; do
+    if [ -d "$d" ]; then
+      tbb_lib="$d"
+      break
+    fi
+  done
+  if [ -z "$tbb_lib" ] || [ -z "$embree_lib" ]; then
+    echo "Error: Could not locate the oneTBB or Embree library directory."
+    exit 1
+  fi
+  # libtbb.so.12 is the SONAME of oneTBB 2023.x
+  ln -sf "$tbb_lib/libtbb.so.12" "$embree_lib/libtbb.so.12"
+  ln -sf "$tbb_lib/libtbb.so" "$embree_lib/libtbb.so"
 }
 
 if [ -n "$XDG_SRC_DIR" ]; then
