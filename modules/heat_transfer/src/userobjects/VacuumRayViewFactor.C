@@ -63,11 +63,15 @@ VacuumRayViewFactor::finalizeViewFactor()
   // pi, the integral of the angular weight function over the hemisphere
   for (const auto i : make_range(_n_sides))
   {
-    const BoundaryID from_id = boundaryIDs()[i];
+    auto from_name = boundaryNames()[i];
+    const BoundaryID from_id = _mesh.getBoundaryID(from_name);
     const Real normalization = 1. / (_areas[i] * libMesh::pi);
     _escape_fractions[i] = _study.escapeWeight(from_id) * normalization;
     for (const auto j : make_range(_n_sides))
-      _view_factors[i][j] = _study.viewFactorWeight(from_id, boundaryIDs()[j]) * normalization;
+    {
+      auto to_name = boundaryNames()[j];
+      _view_factors[i][j] = _study.viewFactorWeight(from_id, _mesh.getBoundaryID(to_name)) * normalization;
+    }
   }
 }
 

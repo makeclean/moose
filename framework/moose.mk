@@ -190,7 +190,7 @@ ifeq ($(ENABLE_XDG),true)
 
   ifneq ($(wildcard $(XDG_DIR)/lib/$(XDG_LIB)),)
     # Adding the include directories
-    libmesh_CPPFLAGS += -I$(XDG_DIR)/include
+    libmesh_CPPFLAGS += -I$(XDG_DIR)/include -DXDG_ENABLE_LIBMESH -DXDG_ENABLE_EMBREE -DXDG_EMBREE4
 
     # Dynamically linking with the available XDG library
     libmesh_LDFLAGS += -Wl,-rpath,$(XDG_DIR)/lib -L$(XDG_DIR)/lib -lxdg

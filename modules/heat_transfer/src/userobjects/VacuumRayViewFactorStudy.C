@@ -13,6 +13,7 @@
 #ifdef MOOSE_XDG_ENABLED
 #include "xdg/constants.h"
 #include "xdg/error.h"
+#include "xdg/mesh_managers.h"
 
 #include "libmesh/elem.h"
 
@@ -98,9 +99,13 @@ VacuumRayViewFactorStudy::initialSetup()
 
   // hand the whole mesh to XDG: each sideset becomes a surface and the complement
   // of the mesh becomes the void volume the rays travel through
+#ifdef XDG_ENABLE_LIBMESH
   auto mesh_manager = std::make_shared<xdg::LibMeshManager>(&_mesh.getMesh());
   _xdg = std::make_shared<xdg::XDG>();
   _xdg->set_mesh_manager_interface(mesh_manager);
+#else
+  mooseError("XDG was built without libMesh support");
+#endif
   mesh_manager->init();
   _xdg->prepare_raytracer();
 
