@@ -192,6 +192,36 @@ ifeq ($(ENABLE_XDG),true)
     # Adding the include directories
     libmesh_CPPFLAGS += -I$(XDG_DIR)/include -DXDG_ENABLE_LIBMESH -DXDG_ENABLE_EMBREE -DXDG_EMBREE4
 
+    # Add Embree include/lib paths if available (built by update_and_rebuild_xdg.sh)
+    EMBREE_DIR ?= $(realpath $(XDG_DIR)/../xdg-deps/embree 2>/dev/null)
+    ifneq ($(wildcard $(EMBREE_DIR)),)
+      libmesh_CPPFLAGS += -I$(EMBREE_DIR)/include
+      ifneq ($(wildcard $(EMBREE_DIR)/lib64),)
+        libmesh_LDFLAGS += -L$(EMBREE_DIR)/lib64
+        libmesh_LDFLAGS += -Wl,-rpath,$(EMBREE_DIR)/lib64
+      endif
+      ifneq ($(wildcard $(EMBREE_DIR)/lib),)
+        libmesh_LDFLAGS += -L$(EMBREE_DIR)/lib
+        libmesh_LDFLAGS += -Wl,-rpath,$(EMBREE_DIR)/lib
+      endif
+      libmesh_LDFLAGS += -lembree4
+    endif
+
+    # Add TBB paths if available
+    TBB_DIR ?= $(realpath $(XDG_DIR)/../xdg-deps/oneTBB 2>/dev/null)
+    ifneq ($(wildcard $(TBB_DIR)),)
+      libmesh_CPPFLAGS += -I$(TBB_DIR)/include
+      ifneq ($(wildcard $(TBB_DIR)/lib64),)
+        libmesh_LDFLAGS += -L$(TBB_DIR)/lib64
+        libmesh_LDFLAGS += -Wl,-rpath,$(TBB_DIR)/lib64
+      endif
+      ifneq ($(wildcard $(TBB_DIR)/lib),)
+        libmesh_LDFLAGS += -L$(TBB_DIR)/lib
+        libmesh_LDFLAGS += -Wl,-rpath,$(TBB_DIR)/lib
+      endif
+      libmesh_LDFLAGS += -ltbb
+    endif
+
     # Dynamically linking with the available XDG library
     libmesh_LDFLAGS += -Wl,-rpath,$(XDG_DIR)/lib -L$(XDG_DIR)/lib -lxdg
 
