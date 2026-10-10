@@ -192,8 +192,11 @@ ifeq ($(ENABLE_XDG),true)
     # Adding the include directories
     libmesh_CPPFLAGS += -I$(XDG_DIR)/include -DXDG_ENABLE_LIBMESH -DXDG_ENABLE_EMBREE -DXDG_EMBREE4
 
-    # Add Embree include/lib paths if available (built by update_and_rebuild_xdg.sh)
-    EMBREE_DIR ?= $(realpath $(XDG_DIR)/../xdg-deps/embree 2>/dev/null)
+    # Add Embree include/lib paths if available (built by update_and_rebuild_xdg.sh).
+    # $(XDG_DIR) points at framework/contrib/xdg/installed, so the sibling xdg-deps
+    # tree is two levels up; realpath fails quietly on a wrong path, which silently
+    # skips these blocks (and drops the embree4 includes)
+    EMBREE_DIR ?= $(realpath $(XDG_DIR)/../../xdg-deps/embree 2>/dev/null)
     ifneq ($(wildcard $(EMBREE_DIR)),)
       libmesh_CPPFLAGS += -I$(EMBREE_DIR)/include
       ifneq ($(wildcard $(EMBREE_DIR)/lib64),)
@@ -208,7 +211,7 @@ ifeq ($(ENABLE_XDG),true)
     endif
 
     # Add TBB paths if available
-    TBB_DIR ?= $(realpath $(XDG_DIR)/../xdg-deps/oneTBB 2>/dev/null)
+    TBB_DIR ?= $(realpath $(XDG_DIR)/../../xdg-deps/oneTBB 2>/dev/null)
     ifneq ($(wildcard $(TBB_DIR)),)
       libmesh_CPPFLAGS += -I$(TBB_DIR)/include
       ifneq ($(wildcard $(TBB_DIR)/lib64),)
