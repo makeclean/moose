@@ -64,6 +64,7 @@
     polar_quad_order = 16
     azimuthal_quad_order = 8
     view_factor_calculator = vacuum_ray_tracing
+    normalize_view_factor = false # radiation escaping to the vacuum cannot be redistributed
     environment = vacuum
   []
 []
