@@ -11,9 +11,12 @@
 #include "MooseMesh.h"
 
 #ifdef MOOSE_XDG_ENABLED
+#include "MooseInit.h"
+#include "xdg/config.h"
 #include "xdg/constants.h"
 #include "xdg/error.h"
 #include "xdg/mesh_managers.h"
+#include "xdg/ray_tracers.h"
 
 #include "libmesh/elem.h"
 
@@ -100,9 +103,25 @@ VacuumRayViewFactorStudy::initialSetup()
   // hand the whole mesh to XDG: each sideset becomes a surface and the complement
   // of the mesh becomes the void volume the rays travel through
 #ifdef XDG_ENABLE_LIBMESH
+  // XDG constructs its own libMesh::LibMeshInit unless the host application
+  // registers one; a second LibMeshInit would install a second thread-buffered
+  // output stream, freeing the one MOOSE installed and leaving libMesh's
+  // streams dangling. Register MOOSE's MooseInit before creating any XDG
+  // object.
+  static bool xdg_registered = false;
+  if (!xdg_registered)
+  {
+    xdg::XDGConfig::config().set_libmesh_external_init(MooseInit::instance());
+    xdg_registered = true;
+  }
   auto mesh_manager = std::make_shared<xdg::LibMeshManager>(&_mesh.getMesh());
   _xdg = std::make_shared<xdg::XDG>();
   _xdg->set_mesh_manager_interface(mesh_manager);
+#ifdef XDG_ENABLE_EMBREE
+  _xdg->set_ray_tracing_interface(std::make_shared<xdg::EmbreeRayTracer>());
+#else
+  mooseError("XDG was built without Embree ray tracing support");
+#endif
 #else
   mooseError("XDG was built without libMesh support");
 #endif

@@ -67,7 +67,8 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
     _escape_fractions(_n_sides, 0),
     _environment(getParam<MooseEnum>("environment")),
     _environment_temperature(isParamSetByUser("environment_temperature")
-                                 ? &getFunctionByName("environment_temperature")
+                                 ? &getFunctionByName(
+                                        getParam<FunctionName>("environment_temperature"))
                                  : nullptr)
 {
   // get emissivity functions

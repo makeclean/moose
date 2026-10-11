@@ -44,6 +44,8 @@ RegisterSigHandler()
   signal(SIGUSR1, SigHandler);
 }
 
+MooseInit * MooseInit::_instance = nullptr;
+
 MooseInit::MooseInit(int argc, char * argv[], MPI_Comm COMM_WORLD_IN)
   : LibMeshInit(argc, argv, COMM_WORLD_IN)
 {
@@ -72,4 +74,22 @@ MooseInit::MooseInit(int argc, char * argv[], MPI_Comm COMM_WORLD_IN)
 #ifdef MOOSE_KOKKOS_ENABLED
   initKokkos();
 #endif
+
+  // Record the fully constructed object for MooseInit::instance(); set last so
+  // a failed construction never exposes a half-initialized MooseInit
+  _instance = this;
+}
+
+MooseInit::~MooseInit()
+{
+  // Clear the instance pointer only if it still refers to this object so that
+  // a second, still-alive MooseInit is not invalidated
+  if (_instance == this)
+    _instance = nullptr;
+}
+
+MooseInit *
+MooseInit::instance()
+{
+  return _instance;
 }

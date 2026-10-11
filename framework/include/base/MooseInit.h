@@ -24,10 +24,18 @@ class MooseInit : public libMesh::LibMeshInit
 {
 public:
   MooseInit(int argc, char * argv[], MPI_Comm COMM_WORLD_IN = MPI_COMM_WORLD);
-  virtual ~MooseInit() = default;
+  virtual ~MooseInit();
+
+  /**
+   * Access to the MooseInit object created by Moose::main(), or nullptr if no
+   * MooseInit currently exists.
+   */
+  static MooseInit * instance();
+
+private:
+  static MooseInit * _instance;
 
 #ifdef MOOSE_KOKKOS_ENABLED
-private:
   void initKokkos();
 #endif
 };
