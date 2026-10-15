@@ -29,4 +29,13 @@
     capabilities = 'xdg'
     mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
   []
+
+  [two_cubes]
+    type = 'CSVDiff'
+    input = 'two_cubes.i'
+    csvdiff = 'two_cubes_out.csv'
+    requirement = 'The system shall compute radiative exchange between the facing surfaces of two separated cubes by ray tracing with view_factor_calculator = vacuum_ray_tracing, such that when the two facing faces are held at 300 K and all other faces are adiabatic, the net heat flux crossing each facing face is equal by mirror symmetry and the faces bordering only empty void exchange no radiation.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
 []
