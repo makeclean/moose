@@ -2,16 +2,12 @@
   kernel_coverage_check = false
 []
 
-# Two 10 cm cubes separated by a 10 cm gap along x: cube A occupies
-# [0, 0.1]^3 and cube B occupies [0.2, 0.3] x [0, 0.1]^2.  The two facing
-# (inner) faces are held at 300 K and exchange radiation across the gap,
-# while every other face borders empty void and exchanges no radiation.
-# By mirror symmetry about x = 0.15 the net heat flux crossing the two
-# inner faces must be equal.  The outer faces use the generated mesh's
-# native sidesets: 'left' and 'right' are single faces (a_out and b_out),
-# and 'bottom', 'top', 'front' and 'back' each contain the pair of
-# coplanar faces of the two cubes, which are equivalent (same emissivity,
-# no mutual visibility, same equilibrium temperature).
+# Two 10 cm cubes separated by a 10 cm gap along x: box1 occupies
+# [0, 0.1]^3 and box2 occupies [0.2, 0.3] x [0, 0.1]^2.  The bottom faces
+# are held at 4000 K (box1) and 400 K (box2), the two facing (inner) faces
+# exchange radiation across the gap, and the eight remaining outer faces
+# are adiabatic.  In steady state heat flows from the hot cube to the cold
+# cube by conduction through each cube and radiation across the gap.
 [Mesh]
   [box1]
     type = GeneratedMeshGenerator
@@ -81,10 +77,6 @@
     type = HeatConduction
     variable = temperature
   []
-#  [heat_conduction_dt]
-#    type = HeatConductionTimeDerivative
-#    variable = temperature
-#  []
 []
 
 [Materials]
@@ -93,16 +85,6 @@
     prop_names = 'thermal_conductivity'
     prop_values = 390.0
   []
-#  [density]
-#    type = GenericConstantMaterial
-#    prop_names = 'density'
-#    prop_values = 8900
-#  []
-#  [specific_heat]
-#    type = GenericConstantMaterial
-#    prop_names = 'specific_heat'
-#    prop_values = 420
-#  []
 []
   
 [GrayDiffuseRadiation]
@@ -157,8 +139,6 @@
 
 [Executioner]
   type = Steady
-  #num_steps = 10
-  #dt = 100
   petsc_options_iname = '-pc_type -pc_hypre_type -pc_hypre_boomeramg_strong_threshold -pc_hypre_boomeramg_coarsen_type -pc_hypre_boomeramg_interp_type '
   petsc_options_value = '   hypre      boomeramg                                  0.7                             HMIS                           ext+i '
   nl_rel_tol = 1e-10

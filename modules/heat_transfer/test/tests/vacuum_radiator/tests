@@ -34,7 +34,7 @@
     type = 'CSVDiff'
     input = 'two_cubes.i'
     csvdiff = 'two_cubes_out.csv'
-    requirement = 'The system shall compute radiative exchange between the facing surfaces of two separated cubes by ray tracing with view_factor_calculator = vacuum_ray_tracing, such that when the two facing faces are held at 300 K and all other faces are adiabatic, the net heat flux crossing each facing face is equal by mirror symmetry and the faces bordering only empty void exchange no radiation.'
+    requirement = 'The system shall compute coupled steady-state conduction and radiative exchange between two separated cubes by ray tracing with view_factor_calculator = vacuum_ray_tracing, such that with the bottom faces held at 4000 K and 400 K, the eight outer faces adiabatic, and the two facing inner faces free, heat flows from the hot cube to the cold cube by conduction and radiation across the gap, the inner-face radiative fluxes are in the hot-to-cold direction, and the adiabatic faces exchange no net radiation.'
     capabilities = 'xdg'
     mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
   []
