@@ -1,0 +1,3 @@
+time,adiabatic_flux_back,adiabatic_flux_bottom,adiabatic_flux_front,adiabatic_flux_top,box_right_flux_0,box_right_flux_1,box_right_flux_2,box_right_flux_3,sphere_center_temp,sphere_face_temp
+0,0,0,0,0,0,0,0,0,0,0
+1,0,0,0,0,4147365.6488713,4147186.1499534,4146871.928849,4147114.8009037,1474.1625324995,1618.498754226

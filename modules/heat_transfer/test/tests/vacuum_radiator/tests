@@ -56,4 +56,13 @@
     capabilities = 'xdg'
     mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
   []
+
+  [sphere_cube]
+    type = 'CSVDiff'
+    input = 'sphere_cube.i'
+    csvdiff = 'sphere_cube_out.csv'
+    requirement = 'The system shall compute coupled steady-state conduction and radiative exchange between a box and a sphere separated by a gap by ray tracing with view_factor_calculator = vacuum_ray_tracing, such that with the box left face held at 4000 K, the other four box faces adiabatic, and the box right face and sphere surface free and subdivided into one patch per facet, heat flows from the box left face by conduction to the box right face and then by radiation across the gap to the sphere, the sphere warms from its initial temperature, and the adiabatic faces exchange no net radiation.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
 []
