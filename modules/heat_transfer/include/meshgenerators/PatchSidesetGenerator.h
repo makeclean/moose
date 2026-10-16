@@ -63,4 +63,7 @@ protected:
 
   /// number of elements of the boundary mesh
   dof_id_type _n_boundary_mesh_elems;
+
+  /// If true, the original sideset is removed after the patch sidesets are created
+  const bool _remove_original_sideset;
 };

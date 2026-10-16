@@ -2,11 +2,18 @@
 
 ## Description
 
-This mesh generator splits a given sideset (`sideset` parameter) into `n` pieces (`n_patches`).
+This mesh generator splits a given sideset (`boundary` parameter) into `n` pieces (`n_patches`).
 The pieces are referred to as patches. Patches are used for net radiation transfer method via
 view factors. The sideset is divided into `n` patches using partitioner that are available from
 libMesh. The new sidesets are named `<old_side_name>_<id>`, where `<id>` is a number running from
 `0` to `n - 1`.
+
+If `n_patches = 0`, one patch is created for every face of the sideset and the partitioner is not
+used.
+
+By default the original sideset is retained on the mesh in addition to the patch sidesets. If
+`remove_original_sideset = true`, the original sideset and its nodeset are removed after the
+patch sidesets are created, so the patch sidesets fully replace the original sideset.
 
 In addition to libMesh partitioners, this mesh generator also supports a grid partitioner. The
 grid partitioner superimposes a 3-dimensional (where $d$ is the dimensionality of the problem) uniform, orthogonal grid

@@ -1,0 +1,25 @@
+[Tests]
+  design = 'PatchSidesetGenerator.md'
+  issues = '#99999999'
+
+  [patches_subdivide_sideset]
+    type = GoogleTest
+    unit_test = PatchSidesetGeneratorTest.patchesSubdivideSideset
+    requirement = 'The system shall subdivide a sideset into the requested number of patch sidesets named <base>_0 through <base>_(n-1), such that the patch faces partition the original sideset faces without overlap and the original sideset is retained when remove_original_sideset = false.'
+  []
+  [remove_original_sideset]
+    type = GoogleTest
+    unit_test = PatchSidesetGeneratorTest.removeOriginalSideset
+    requirement = 'The system shall remove the original sideset and its nodeset from the mesh when remove_original_sideset = true, such that the patch sidesets fully replace the original sideset on the mesh.'
+  []
+  [facet_mode_one_patch_per_face]
+    type = GoogleTest
+    unit_test = PatchSidesetGeneratorTest.facetModeOnePatchPerFace
+    requirement = 'The system shall create one patch sideset per face of the input sideset when n_patches = 0, such that the requested partitioner is ignored and the patch faces partition the original sideset faces without overlap.'
+  []
+  [single_patch_keeps_whole_sideset]
+    type = GoogleTest
+    unit_test = PatchSidesetGeneratorTest.singlePatchKeepsWholeSideset
+    requirement = 'The system shall create a single patch sideset containing all faces of the input sideset when n_patches = 1, such that the patch matches the original sideset exactly.'
+  []
+[]

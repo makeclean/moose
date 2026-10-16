@@ -1,6 +1,6 @@
 [Tests]
   issues = '#99999999'
-  design = 'GrayDiffuseRadiation.md VacuumRayViewFactorStudy.md VacuumRayViewFactor.md'
+  design = 'GrayDiffuseRadiation.md VacuumRayViewFactorStudy.md VacuumRayViewFactor.md PatchSidesetGenerator.md'
 
   [convex_escape]
     type = 'CSVDiff'
@@ -35,6 +35,24 @@
     input = 'two_cubes.i'
     csvdiff = 'two_cubes_out.csv'
     requirement = 'The system shall compute radiative exchange between the facing surfaces of two separated cubes by ray tracing with view_factor_calculator = vacuum_ray_tracing, such that when the two facing faces are held at 300 K and all other faces are adiabatic, the net heat flux crossing each facing face is equal by mirror symmetry and the faces bordering only empty void exchange no radiation.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
+
+  [two_cubes_patched]
+    type = 'CSVDiff'
+    input = 'two_cubes_patched.i'
+    csvdiff = 'two_cubes_patched_out.csv'
+    requirement = 'The system shall subdivide each radiating sideset of the vacuum_ray_tracing view factor calculation into the requested number of radiation patches (n_patches > 1) using the PatchSidesetGenerator, such that for two facing cube faces held at 400 K and 300 K the per-patch temperatures equal the prescribed values, the per-patch view factors satisfy reciprocity for every patch pair, and the per-patch net heat flux on each face is within 0.1% of the lumped (n_patches = 1) face-average result.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
+
+  [two_cubes_facet]
+    type = 'CSVDiff'
+    input = 'two_cubes_facet.i'
+    csvdiff = 'two_cubes_facet_out.csv'
+    requirement = 'The system shall create one radiation patch per facet of a radiating sideset when n_patches = 0, ignoring the requested partitioner, such that for two facing cube faces held at 400 K and 300 K the per-patch temperatures equal the prescribed values, the per-patch view factors satisfy reciprocity for every patch pair, and the per-patch net heat flux on each face is within 1% of the coarse (n_patches = 4) patch result.'
     capabilities = 'xdg'
     mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
   []

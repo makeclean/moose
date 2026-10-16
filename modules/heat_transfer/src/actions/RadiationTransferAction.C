@@ -9,6 +9,9 @@
 
 #include "RadiationTransferAction.h"
 #include "Factory.h"
+
+#include <algorithm>
+#include <cctype>
 #include "MooseMesh.h"
 #include "MeshGeneratorMesh.h"
 #include "FEProblemBase.h"
@@ -22,6 +25,15 @@ registerMooseAction("HeatTransferApp", RadiationTransferAction, "add_bc");
 registerMooseAction("HeatTransferApp", RadiationTransferAction, "add_ray_boundary_condition");
 registerMooseAction("HeatTransferApp", RadiationTransferAction, "add_aux_variable");
 registerMooseAction("HeatTransferApp", RadiationTransferAction, "add_aux_kernel");
+
+namespace
+{
+/// whether a boundary name is actually a bare numeric boundary ID
+bool isNumericString(const std::string & s)
+{
+  return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return std::isdigit(c); });
+}
+}
 
 InputParameters
 RadiationTransferAction::validParams()
@@ -46,8 +58,10 @@ RadiationTransferAction::validParams()
   params.addParam<std::vector<FunctionName>>(
       "fixed_boundary_temperatures", {}, "The temperatures of the fixed boundary.");
 
-  params.addRequiredParam<std::vector<unsigned int>>("n_patches",
-                                                     "Number of radiation patches per sideset.");
+  params.addRequiredParam<std::vector<unsigned int>>(
+      "n_patches",
+      "Number of radiation patches per sideset. If zero, one patch is created for every face of "
+      "the sideset.");
   MultiMooseEnum partitioning(
       "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc", "default");
   partitioning.addValidName("grid");
@@ -183,6 +197,21 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
                "vacuum_ray_tracing, because the radiation that escapes to the environment must not "
                "be redistributed among the participating surfaces.");
 
+  if (_view_factor_calculator == "vacuum_ray_tracing")
+  {
+    const auto n_patches = getParam<std::vector<unsigned int>>("n_patches");
+    if (n_patches.size() != _boundary_names.size())
+      paramError("n_patches", "The number of entries must match the number of entries in 'boundary'.");
+    for (const auto j : index_range(_boundary_names))
+      if (n_patches[j] != 1 && isNumericString(_boundary_names[j]))
+        paramError("boundary",
+                   "Boundary ",
+                   _boundary_names[j],
+                   " is specified by boundary ID. Patched boundaries (n_patches != 1) must be "
+                   "given by name when using view_factor_calculator = vacuum_ray_tracing, because "
+                   "the original sideset is removed from the mesh.");
+  }
+
   if (_add_heat_flux_aux)
   {
     if (isParamValid("heat_flux_variable"))
@@ -282,7 +311,10 @@ RadiationTransferAction::addFixedTemperatureBCs() const
     InputParameters params = _factory.getValidParams("FunctionDirichletBC");
     params.set<FunctionName>("function") = fixed_boundary_temperatures[i];
     params.set<NonlinearVariableName>("variable") = temperature;
-    params.set<std::vector<BoundaryName>>("boundary") = {fixed_temperature_boundaries[i]};
+    // the boundary is expanded to the patch sidesets, which replace the original sideset when the
+    // surface is patched (e.g. with view_factor_calculator = vacuum_ray_tracing and n_patches != 1)
+    params.set<std::vector<BoundaryName>>("boundary") =
+        patchBoundaryNames({fixed_temperature_boundaries[i]});
 
     _problem->addBoundaryCondition("FunctionDirichletBC",
                                    "fixed_temperature_bc_" + _name + "_" +
@@ -501,31 +533,46 @@ RadiationTransferAction::addRadiationObject() const
 std::vector<std::vector<std::string>>
 RadiationTransferAction::radiationPatchNames() const
 {
-  // the vacuum calculation does not split the surfaces into patches
-  if (_view_factor_calculator == "vacuum_ray_tracing")
-  {
-    std::vector<std::vector<std::string>> names(_boundary_names.size());
-    for (const auto j : index_range(_boundary_names))
-      names[j] = {_boundary_names[j]};
-    return names;
-  }
-
   std::vector<std::vector<std::string>> radiation_patch_names(_boundary_names.size());
-  std::vector<BoundaryID> boundary_ids = _mesh->getBoundaryIDs(_boundary_names);
-  for (unsigned int j = 0; j < boundary_ids.size(); ++j)
-  {
-    boundary_id_type bid = boundary_ids[j];
-    std::string base_name = _mesh->getBoundaryName(bid);
-    std::vector<std::string> bnames;
-    for (unsigned int i = 0; i < nPatch(j); ++i)
-    {
-      std::stringstream ss;
-      ss << base_name << "_" << i;
-      bnames.push_back(ss.str());
-    }
-    radiation_patch_names[j] = bnames;
-  }
+  for (const auto j : index_range(_boundary_names))
+    radiation_patch_names[j] = boundaryPatchNames(j);
   return radiation_patch_names;
+}
+
+bool
+RadiationTransferAction::isPatched(unsigned int j) const
+{
+  // in the vacuum (open geometry) calculation, a sideset with n_patches = 1 is not split
+  if (_view_factor_calculator == "vacuum_ray_tracing" &&
+      getParam<std::vector<unsigned int>>("n_patches")[j] == 1)
+    return false;
+  return true;
+}
+
+std::string
+RadiationTransferAction::patchBaseName(unsigned int j) const
+{
+  // in the vacuum calculation a patched sideset is removed from the mesh, so its patch names are
+  // derived from the name given in the 'boundary' parameter
+  if (isPatched(j) && _view_factor_calculator == "vacuum_ray_tracing")
+    return _boundary_names[j];
+  return _mesh->getBoundaryName(_mesh->getBoundaryID(_boundary_names[j]));
+}
+
+std::vector<std::string>
+RadiationTransferAction::boundaryPatchNames(unsigned int j) const
+{
+  const auto base_name = patchBaseName(j);
+  if (!isPatched(j))
+    return {base_name};
+  std::vector<std::string> bnames;
+  for (const auto i : make_range(nPatch(j)))
+  {
+    std::stringstream ss;
+    ss << base_name << "_" << i;
+    bnames.push_back(ss.str());
+  }
+  return bnames;
 }
 
 std::vector<std::vector<std::string>>
@@ -534,11 +581,9 @@ RadiationTransferAction::bcRadiationPatchNames() const
   auto ad_bnd_names = getParam<std::vector<BoundaryName>>("adiabatic_boundary");
   auto ft_bnd_names = getParam<std::vector<BoundaryName>>("fixed_temperature_boundary");
   std::vector<std::vector<std::string>> radiation_patch_names;
-  std::vector<BoundaryID> boundary_ids = _mesh->getBoundaryIDs(_boundary_names);
-  for (unsigned int j = 0; j < boundary_ids.size(); ++j)
+  for (const auto j : index_range(_boundary_names))
   {
-    boundary_id_type bid = boundary_ids[j];
-    BoundaryName bnd_name = _boundary_names[j];
+    const auto bnd_name = _boundary_names[j];
 
     // check if this sideset is adiabatic or isothermal
     auto it_a = std::find(ad_bnd_names.begin(), ad_bnd_names.end(), bnd_name);
@@ -546,22 +591,7 @@ RadiationTransferAction::bcRadiationPatchNames() const
     if (it_a != ad_bnd_names.end() || it_t != ft_bnd_names.end())
       continue;
 
-    // the vacuum calculation does not split the surfaces into patches
-    if (_view_factor_calculator == "vacuum_ray_tracing")
-    {
-      radiation_patch_names.emplace_back(1, bnd_name);
-      continue;
-    }
-
-    std::string base_name = _mesh->getBoundaryName(bid);
-    std::vector<std::string> bnames;
-    for (unsigned int i = 0; i < nPatch(j); ++i)
-    {
-      std::stringstream ss;
-      ss << base_name << "_" << i;
-      bnames.push_back(ss.str());
-    }
-    radiation_patch_names.push_back(bnames);
+    radiation_patch_names.push_back(boundaryPatchNames(j));
   }
   return radiation_patch_names;
 }
@@ -570,26 +600,15 @@ std::vector<BoundaryName>
 RadiationTransferAction::patchBoundaryNames(
     const std::vector<BoundaryName> & boundary_names_or_ids) const
 {
-  // the vacuum calculation does not split the surfaces into patches
-  if (_view_factor_calculator == "vacuum_ray_tracing")
-    return boundary_names_or_ids;
-
   std::vector<BoundaryName> patch_boundary_names;
-  std::vector<BoundaryID> ids = _mesh->getBoundaryIDs(boundary_names_or_ids);
   for (const auto i : index_range(boundary_names_or_ids))
   {
     const auto boundary_name_or_id = boundary_names_or_ids[i];
     const auto it = std::find(_boundary_names.begin(), _boundary_names.end(), boundary_name_or_id);
     mooseAssert(it != _boundary_names.end(), boundary_name_or_id + " not found in 'boundary'.");
     const auto boundary_index = std::distance(_boundary_names.begin(), it);
-    const auto n_patches = nPatch(boundary_index);
-    const auto boundary_name = _mesh->getBoundaryName(ids[i]);
-    for (const auto j : make_range(n_patches))
-    {
-      std::stringstream ss;
-      ss << boundary_name << "_" << j;
-      patch_boundary_names.push_back(ss.str());
-    }
+    const auto bnames = boundaryPatchNames(boundary_index);
+    patch_boundary_names.insert(patch_boundary_names.end(), bnames.begin(), bnames.end());
   }
   return patch_boundary_names;
 }
@@ -615,23 +634,6 @@ RadiationTransferAction::addMeshGenerator()
 {
   std::vector<unsigned int> n_patches = getParam<std::vector<unsigned int>>("n_patches");
 
-  // the vacuum (open geometry) calculation treats each sideset as a single
-  // surface, so no patch mesh generators are added
-  if (_view_factor_calculator == "vacuum_ray_tracing")
-  {
-    if (_boundary_names.size() != n_patches.size())
-      mooseError("n_patches parameter must have same length as boundary parameter.");
-    for (const auto j : index_range(n_patches))
-      if (n_patches[j] != 1)
-        mooseError("n_patches (",
-                   n_patches[j],
-                   ") for boundary ",
-                   _boundary_names[j],
-                   " must be 1 when using view_factor_calculator = vacuum_ray_tracing, because "
-                   "each sideset is a single surface rather than a set of patches.");
-    return;
-  }
-
   MultiMooseEnum partitioners = getParam<MultiMooseEnum>("partitioners");
   if (!_pars.isParamSetByUser("partitioners"))
   {
@@ -655,14 +657,28 @@ RadiationTransferAction::addMeshGenerator()
           "centroid partitioner is selected for at least one sideset. "
           "centroid_partitioner_directions parameter must have same length as boundary parameter.");
 
+  // in the vacuum (open geometry) calculation a sideset with n_patches = 1 is not split, so
+  // patch mesh generators are only added for the remaining sidesets
+  bool add_patch_generators = false;
+  for (const auto j : index_range(_boundary_names))
+    if (isPatched(j))
+      add_patch_generators = true;
+
   // check if mesh is a MeshGeneratorMesh
-  std::shared_ptr<MeshGeneratorMesh> mg_mesh = std::dynamic_pointer_cast<MeshGeneratorMesh>(_mesh);
-  if (!mg_mesh)
-    mooseError("This action adds MeshGenerator objects and therefore only works with a "
-               "MeshGeneratorMesh.");
+  if (add_patch_generators)
+  {
+    std::shared_ptr<MeshGeneratorMesh> mg_mesh =
+        std::dynamic_pointer_cast<MeshGeneratorMesh>(_mesh);
+    if (!mg_mesh)
+      mooseError("This action adds MeshGenerator objects and therefore only works with a "
+                 "MeshGeneratorMesh.");
+  }
 
   for (unsigned int j = 0; j < _boundary_names.size(); ++j)
   {
+    if (!isPatched(j))
+      continue;
+
     InputParameters params = _factory.getValidParams("PatchSidesetGenerator");
     params.set<BoundaryName>("boundary") = _boundary_names[j];
     params.set<unsigned int>("n_patches") = n_patches[j];
@@ -671,6 +687,11 @@ RadiationTransferAction::addMeshGenerator()
     if (partitioners[j] == "centroid")
       params.set<MooseEnum>("centroid_partitioner_direction") = direction[j];
 
+    // in the vacuum calculation the patch sidesets fully replace the original sideset, which XDG
+    // would otherwise build a coincident surface for
+    if (_view_factor_calculator == "vacuum_ray_tracing")
+      params.set<bool>("remove_original_sideset") = true;
+
     _app.appendMeshGenerator("PatchSidesetGenerator", meshGeneratorName(j), params);
   }
 }
@@ -678,8 +699,7 @@ RadiationTransferAction::addMeshGenerator()
 unsigned int
 RadiationTransferAction::nPatch(unsigned int j) const
 {
-  // the vacuum calculation does not split the surfaces into patches
-  if (_view_factor_calculator == "vacuum_ray_tracing")
+  if (!isPatched(j))
     return 1;
 
   const MeshGenerator * mg = &_app.getMeshGenerator(meshGeneratorName(j));

@@ -39,6 +39,15 @@ protected:
   std::vector<std::vector<std::string>> bcRadiationPatchNames() const;
   std::vector<BoundaryName>
   patchBoundaryNames(const std::vector<BoundaryName> & boundary_names) const;
+
+  /// whether the sideset given by 'boundary'[j] is split into patch sidesets
+  bool isPatched(unsigned int j) const;
+
+  /// the name the patch sidesets of 'boundary'[j] are derived from
+  std::string patchBaseName(unsigned int j) const;
+
+  /// the patch sideset names of 'boundary'[j]
+  std::vector<std::string> boundaryPatchNames(unsigned int j) const;
   std::vector<BoundaryName> radiationPatchBoundaryNames() const;
   std::vector<BoundaryName> adiabaticPatchBoundaryNames() const;
   UserObjectName viewFactorObjectName() const;

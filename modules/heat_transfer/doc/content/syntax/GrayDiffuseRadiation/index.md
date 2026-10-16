@@ -31,7 +31,10 @@ In summary:
 ## Boundary Patches
 
 The surfaces in radiation exchange correspond to sidesets. Radiation quantities are averaged over each of these surfaces. The accuracy of the method can be improved by creating new sub-surfaces (called "patches") using the
-[!param](/GrayDiffuseRadiation/n_patches) parameter.
+[!param](/GrayDiffuseRadiation/n_patches) parameter. Patch subdivision is available with both
+the `ray_tracing` and `vacuum_ray_tracing` values of
+[!param](/GrayDiffuseRadiation/view_factor_calculator), and a value of `0` creates one patch for
+every face of the sideset.
 
 ## View Factors
 

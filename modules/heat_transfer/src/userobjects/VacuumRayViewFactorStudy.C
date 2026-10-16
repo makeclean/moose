@@ -140,8 +140,8 @@ VacuumRayViewFactorStudy::initialSetup()
       mooseError("Boundary ",
                  _mesh.getBoundaryName(pair.first),
                  " does not form a single surface of the XDG model. The vacuum (open geometry) "
-                 "view factor calculation does not support sidesets that are split into patches or "
-                 "that share interfaces with other sidesets.");
+                 "view factor calculation does not support sidesets that share interfaces with "
+                 "other sidesets.");
   for (const auto surface : model_surfaces)
     if (!_boundary_index.count(surface))
       mooseError("Surface ",

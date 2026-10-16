@@ -38,7 +38,15 @@ PatchSidesetGenerator::validParams()
   params.addRequiredParam<BoundaryName>("boundary",
                                         "The boundary that will be divided into patches");
   params.addRequiredRangeCheckedParam<unsigned int>(
-      "n_patches", "n_patches>0", "Number of patches");
+      "n_patches",
+      "n_patches>=0",
+      "Number of patches. If zero, one patch is created for every face of the sideset.");
+
+  params.addParam<bool>(
+      "remove_original_sideset",
+      false,
+      "If true, remove the original sideset after the patch sidesets are created. The patch "
+      "sidesets then fully replace the original sideset on the mesh.");
 
   MooseEnum partitioning = MooseMesh::partitioning(); // default MOOSE partitioning
   partitioning += "grid";                             // ...but also add our own
@@ -66,7 +74,8 @@ PatchSidesetGenerator::PatchSidesetGenerator(const InputParameters & parameters)
     _input(getMesh("input")),
     _n_patches(getParam<unsigned int>("n_patches")),
     _sideset_name(getParam<BoundaryName>("boundary")),
-    _partitioner_name(getParam<MooseEnum>("partitioner"))
+    _partitioner_name(getParam<MooseEnum>("partitioner")),
+    _remove_original_sideset(getParam<bool>("remove_original_sideset"))
 {
 }
 
@@ -177,8 +186,18 @@ PatchSidesetGenerator::generate()
   // partition the boundary mesh
   boundary_mesh->prepare_for_use();
   _n_boundary_mesh_elems = boundary_mesh->n_elem();
-  if (_partitioner_name == "grid")
+  if (_n_patches == 0)
+  {
+    // facet mode: one patch per face; the partitioner is not used
+    _n_patches = _n_boundary_mesh_elems;
+    unsigned int patch_id = 0;
+    for (auto & elem_ptr : boundary_mesh->active_element_ptr_range())
+      elem_ptr->processor_id() = patch_id++;
+  }
+  else if (_partitioner_name == "grid")
+  {
     partition(*boundary_mesh);
+  }
   else
   {
     auto partitioner_enum = getParam<MooseEnum>("partitioner");
@@ -224,6 +243,13 @@ PatchSidesetGenerator::generate()
   {
     boundary_info.sideset_name(boundary_ids[j]) = sideset_names[j];
     boundary_info.nodeset_name(boundary_ids[j]) = sideset_names[j];
+  }
+
+  if (_remove_original_sideset)
+  {
+    // every face of the original sideset now belongs to exactly one patch sideset,
+    // so the original sideset (and its nodeset) can be removed from the mesh
+    boundary_info.remove_id(_sideset);
   }
 
   return mesh;
