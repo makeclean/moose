@@ -121,8 +121,6 @@
     boundary = 'box2:_left'
   []
 
-  # the outer faces border only empty void, so they must exchange no
-  # radiation and equilibrate to 0 K
   [view_factor_b1b2]
     type = ViewFactorPP
     from_boundary = 'box1:_right'
