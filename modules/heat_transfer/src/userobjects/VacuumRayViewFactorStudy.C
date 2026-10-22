@@ -9,6 +9,7 @@
 
 #include "VacuumRayViewFactorStudy.h"
 #include "MooseMesh.h"
+#include "SideSetPatch.h"
 
 #ifdef MOOSE_XDG_ENABLED
 #include "MooseInit.h"
@@ -19,9 +20,11 @@
 #include "xdg/ray_tracers.h"
 
 #include "libmesh/elem.h"
+#include "libmesh/utility.h"
 
 #include <algorithm>
 #include <set>
+#include <sstream>
 
 registerMooseObject("HeatTransferApp", VacuumRayViewFactorStudy);
 
@@ -51,6 +54,25 @@ VacuumRayViewFactorStudy::validParams()
       "Order of the azimuthal quadrature per quadrant [azimuthal angle is measured in a plane "
       "perpendicular to the normal].");
 
+  params.addParam<std::vector<unsigned int>>(
+      "n_patches",
+      {},
+      "Number of patches per boundary. If empty, every boundary is a single surface. If zero, one "
+      "patch is created for every face of the boundary.");
+
+  MultiMooseEnum partitioning(
+      "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc", "default");
+  partitioning.addValidName("grid");
+  params.addParam<MultiMooseEnum>(
+      "partitioners",
+      partitioning,
+      "The partitioner to use for splitting each boundary into patches.");
+
+  MultiMooseEnum direction("x y z radial");
+  params.addParam<MultiMooseEnum>("centroid_partitioner_directions",
+                                  direction,
+                                  "The sort direction if using the centroid partitioner.");
+
   params.addClassDescription(
       "Computes view factors and escape fractions between surfaces radiating into an open "
       "(vacuum) environment by ray tracing with the XDG library.");
@@ -62,6 +84,7 @@ VacuumRayViewFactorStudy::VacuumRayViewFactorStudy(const InputParameters & param
   : SideUserObject(parameters),
     _boundary_ids(_mesh.getBoundaryIDs(getParam<std::vector<BoundaryName>>("boundary"))),
     _n_boundaries(_boundary_ids.size()),
+    _n_surfaces(0),
     _fe_face(FEBase::build(_mesh.dimension(), FEType(CONSTANT, MONOMIAL).set_p_refinement(false))),
     _q_face(QBase::build(Moose::stringToEnum<QuadratureType>(getParam<MooseEnum>("face_type")),
                          _mesh.dimension() - 1,
@@ -73,11 +96,46 @@ VacuumRayViewFactorStudy::VacuumRayViewFactorStudy(const InputParameters & param
         0,
         1)),
     _num_dir(_aq->numDirections()),
-    _vf_weights(_n_boundaries),
-    _escape_weights(_n_boundaries, 0)
+    _bump(0)
 {
   for (const auto i : index_range(_boundary_ids))
     _boundary_index[_boundary_ids[i]] = i;
+
+  // split each participating boundary into patches; a surface is a patch, and the surfaces are
+  // ordered boundary by boundary, patch by patch
+  std::vector<unsigned int> n_patches = getParam<std::vector<unsigned int>>("n_patches");
+  const MultiMooseEnum & partitioners = getParam<MultiMooseEnum>("partitioners");
+  const MultiMooseEnum & directions = getParam<MultiMooseEnum>("centroid_partitioner_directions");
+
+  if (n_patches.empty())
+    n_patches.assign(_n_boundaries, 1);
+  else if (n_patches.size() != _n_boundaries)
+    paramError("n_patches", "The number of entries must match the number of boundary entries.");
+
+  if (partitioners.size() != 0 && partitioners.size() != _n_boundaries)
+    paramError("partitioners", "The number of entries must match the number of boundary entries.");
+
+  if (directions.size() != 0 && directions.size() != _n_boundaries)
+    paramError("centroid_partitioner_directions",
+               "The number of entries must match the number of boundary entries.");
+
+  unsigned int offset = 0;
+  for (const auto j : index_range(_boundary_ids))
+  {
+    _patches.push_back(std::make_unique<SideSetPatch>(
+        _mesh.getMesh(),
+        _boundary_ids[j],
+        n_patches[j],
+        partitioners.size() ? partitioners[j] : "metis",
+        directions.size() ? directions[j] : ""));
+
+    _surface_offsets.push_back(offset);
+    _surface_boundary.insert(_surface_boundary.end(), _patches[j]->nPatches(), j);
+    offset += _patches[j]->nPatches();
+  }
+  _n_surfaces = offset;
+  _escape_weights.assign(_n_surfaces, 0);
+  _vf_weights = ViewFactorMatrix(_n_surfaces);
 
   if (_mesh.dimension() != 3)
     mooseError("VacuumRayViewFactorStudy only supports three-dimensional meshes.");
@@ -96,7 +154,7 @@ void
 VacuumRayViewFactorStudy::initialSetup()
 {
   // the model is built once on thread 0; the other threaded copies query the
-  // primary through viewFactorWeight/escapeWeight in finalize
+  // primary through viewFactorRow/escapeWeight in finalize
   if (_tid != 0)
     return;
 
@@ -152,9 +210,6 @@ VacuumRayViewFactorStudy::initialSetup()
                  "sideset of the mesh must be listed in the 'boundary' parameter when using "
                  "view_factor_calculator = vacuum_ray_tracing.");
 
-  for (const auto surface : model_surfaces)
-    _surface_to_boundary[surface] = surface;
-
   // map the node ids of every face of the participating surfaces to its XDG face
   // id; this is used to exclude the emitting face from each ray trace
   for (const auto surface : _boundary_ids)
@@ -165,6 +220,27 @@ VacuumRayViewFactorStudy::initialSetup()
       std::sort(node_ids.begin(), node_ids.end());
       _face_id_by_node_ids[node_ids] = face;
     }
+
+  // map every XDG face to the patch (surface) that contains it, so that a ray hit can be
+  // credited to the right patch without looking the face up during every ray trace
+  for (const auto & [elem_id, side, sideset] :
+       _mesh.getMesh().get_boundary_info().build_active_side_list())
+  {
+    if (!_boundary_index.count(sideset))
+      continue;
+
+    const libMesh::Elem * elem = _mesh.getMesh().elem_ptr(elem_id);
+    const auto nodes_on_side = elem->nodes_on_side(side);
+    std::vector<dof_id_type> node_ids(nodes_on_side.begin(), nodes_on_side.end());
+    std::sort(node_ids.begin(), node_ids.end());
+
+    const auto face_it = _face_id_by_node_ids.find(node_ids);
+    if (face_it == _face_id_by_node_ids.end())
+      mooseError("A face of boundary ",
+                 _mesh.getBoundaryName(sideset),
+                 " was not found in the XDG model.");
+    _surface_by_face[face_it->second] = surfaceIndex(*elem, side);
+  }
 
   // nudge the ray origin off the emitting surface by the same dilation distance
   // that XDG uses to inflate its bounding boxes, so that the first hit cannot be
@@ -189,7 +265,7 @@ VacuumRayViewFactorStudy::execute()
   if (_current_elem->processor_id() != processor_id())
     return;
 
-  const unsigned int from = boundaryIndex(_current_boundary_id);
+  const unsigned int from = surfaceIndex(*_current_elem, _current_side);
 
   // the XDG model lives on the primary (thread 0) copy of this object
   const VacuumRayViewFactorStudy * model = this;
@@ -232,9 +308,7 @@ VacuumRayViewFactorStudy::execute()
           model->_void_volume, pos, dir, xdg::INFTY, xdg::HitOrientation::ANY, &exclude);
 
       if (hit_surface != xdg::ID_NONE)
-        _vf_weights.add(from,
-                        boundaryIndex(libmesh_map_find(model->_surface_to_boundary, hit_surface)),
-                        weight);
+        _vf_weights.add(from, libmesh_map_find(model->_surface_by_face, exclude.back()), weight);
       else
         _escape_weights[from] += weight;
     }
@@ -246,8 +320,7 @@ VacuumRayViewFactorStudy::finalize()
 {
   // the ray weights are accumulated on the processors that own the elements
   _vf_weights.gatherSum(comm());
-  for (const auto i : make_range(_n_boundaries))
-    gatherSum(_escape_weights[i]);
+  gatherSum(_escape_weights);
 }
 
 void
@@ -255,39 +328,66 @@ VacuumRayViewFactorStudy::threadJoin(const UserObject & y)
 {
   const auto & study = cast_ref<const VacuumRayViewFactorStudy &>(y);
   _vf_weights.merge(study._vf_weights);
-  for (const auto i : make_range(_n_boundaries))
+  for (const auto i : make_range(_n_surfaces))
     _escape_weights[i] += study._escape_weights[i];
 }
 
-Real
-VacuumRayViewFactorStudy::viewFactorWeight(const BoundaryID from_id, const BoundaryID to_id) const
+unsigned int
+VacuumRayViewFactorStudy::surfaceIndex(const libMesh::Elem & elem, const unsigned int side) const
 {
-  return _vf_weights.get(boundaryIndex(from_id), boundaryIndex(to_id));
-}
+  for (const auto j : index_range(_patches))
+  {
+    const unsigned int patch = _patches[j]->patchIndex(elem.id(), side);
+    if (patch != libMesh::invalid_uint)
+      return _surface_offsets[j] + patch;
+  }
 
-const std::vector<ViewFactorMatrix::Entry> &
-VacuumRayViewFactorStudy::viewFactorRow(const BoundaryID from_id) const
-{
-  return _vf_weights.row(boundaryIndex(from_id));
-}
-
-Real
-VacuumRayViewFactorStudy::escapeWeight(const BoundaryID from_id) const
-{
-  return _escape_weights[boundaryIndex(from_id)];
+  mooseError("The side ",
+             side,
+             " of element ",
+             elem.id(),
+             " is not part of any of the participating boundaries.");
 }
 
 unsigned int
-VacuumRayViewFactorStudy::boundaryIndex(BoundaryID id) const
+VacuumRayViewFactorStudy::surfaceIndex(const xdg::MeshID face) const
 {
-  const auto it = _boundary_index.find(id);
-  if (it == _boundary_index.end())
-    mooseError("Boundary id ",
-               id,
-               " (",
-               _mesh.getBoundaryName(id),
-               ") is not listed in the 'boundary' parameter.");
-  return it->second;
+  return libmesh_map_find(_surface_by_face, face);
+}
+
+BoundaryID
+VacuumRayViewFactorStudy::surfaceBoundaryID(const unsigned int surface) const
+{
+  mooseAssert(surface < _n_surfaces, "Surface index out of range.");
+  return _boundary_ids[_surface_boundary[surface]];
+}
+
+std::string
+VacuumRayViewFactorStudy::surfaceName(const unsigned int surface) const
+{
+  mooseAssert(surface < _n_surfaces, "Surface index out of range.");
+  const auto j = _surface_boundary[surface];
+  std::stringstream ss;
+  ss << _mesh.getBoundaryName(_boundary_ids[j]) << "_" << (surface - _surface_offsets[j]);
+  return ss.str();
+}
+
+Real
+VacuumRayViewFactorStudy::viewFactorWeight(const unsigned int from, const unsigned int to) const
+{
+  return _vf_weights.get(from, to);
+}
+
+const std::vector<ViewFactorMatrix::Entry> &
+VacuumRayViewFactorStudy::viewFactorRow(const unsigned int from) const
+{
+  return _vf_weights.row(from);
+}
+
+Real
+VacuumRayViewFactorStudy::escapeWeight(const unsigned int from) const
+{
+  return _escape_weights[from];
 }
 
 #endif // MOOSE_XDG_ENABLED

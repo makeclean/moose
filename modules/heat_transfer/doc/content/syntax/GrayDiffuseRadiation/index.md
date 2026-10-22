@@ -36,6 +36,14 @@ the `ray_tracing` and `vacuum_ray_tracing` values of
 [!param](/GrayDiffuseRadiation/view_factor_calculator), and a value of `0` creates one patch for
 every face of the sideset.
 
+By default the patches are indexed internally by the radiation objects and no sideset is added to
+the mesh. This keeps the number of patches independent of the limited libMesh boundary id space,
+which matters for `n_patches = 0` on sidesets with many faces. Set
+[!param](/GrayDiffuseRadiation/create_patch_sidesets) to `true` to instead write the patches to
+the mesh as one sideset per patch (through [PatchSidesetGenerator.md]), which is required with
+the `ray_tracing` and `analytical` view factor calculators. In that case the radiation quantities
+of a patch can be queried directly by its generated sideset name, `<boundary>_<patch>`.
+
 ## View Factors
 
 By default, MOOSE's raytracing module is used for calculating view factors. The method is discussed in detail in
@@ -60,17 +68,20 @@ the environment is a black body at the temperature given by the function
 $\sigma T_{\text{env}}^4$ arrives at the surfaces according to their escape fractions.
 
 The vacuum ray tracing calculation applies to three-dimensional problems on serial replicated meshes, and every
-surface bordering the void must be listed in the [!param](/GrayDiffuseRadiation/boundary) parameter. Patches are not
-supported: the [!param](/GrayDiffuseRadiation/n_patches) values must all be one, and each surface in radiative exchange
-is a single surface.
+surface bordering the void must be listed in the [!param](/GrayDiffuseRadiation/boundary) parameter. Each
+sideset in radiative exchange is a single XDG surface that is split into the patches given by
+[!param](/GrayDiffuseRadiation/n_patches); the patches are indexed internally and are not added to
+the mesh as sidesets.
 
 ## Implementation
 
 The following tasks are performed by this syntax/action:
 
-- New sidesets are created with [PatchSidesetGenerator.md], corresponding to the numbers of
-  patches specified by [!param](/GrayDiffuseRadiation/n_patches). This step is skipped if
-  [!param](/GrayDiffuseRadiation/view_factor_calculator) is `vacuum_ray_tracing`, which requires $n_{\text{patches}} = 1$.
+- If [!param](/GrayDiffuseRadiation/create_patch_sidesets) is `true`, new sidesets are created
+  with [PatchSidesetGenerator.md], corresponding to the numbers of patches specified by
+  [!param](/GrayDiffuseRadiation/n_patches). Otherwise the patches are indexed internally by the
+  radiation objects; this is only supported with
+  [!param](/GrayDiffuseRadiation/view_factor_calculator) = `vacuum_ray_tracing`.
 - A [GrayLambertSurfaceRadiationBase.md] object is created.
 - [GrayLambertNeumannBC.md] objects are created for boundaries requiring BC.
 - A [UnobstructedPlanarViewFactor.md] ([!param](/GrayDiffuseRadiation/view_factor_calculator) is `analytical`)

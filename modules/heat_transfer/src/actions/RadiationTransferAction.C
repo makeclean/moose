@@ -76,6 +76,13 @@ RadiationTransferAction::validParams()
                                   "Specifies the sort direction if using the centroid partitioner. "
                                   "Available options: x, y, z, radial");
 
+  params.addParam<bool>(
+      "create_patch_sidesets",
+      false,
+      "If true, the patch subdivision is written to the mesh as one sideset per patch. If false, "
+      "the patches are indexed internally by the radiation objects. Internal patches are only "
+      "supported with view_factor_calculator = vacuum_ray_tracing.");
+
   params.addRequiredParam<VariableName>("temperature", "The coupled temperature variable.");
   params.addRequiredParam<std::vector<FunctionName>>("emissivity",
                                                      "Emissivities for each boundary.");
@@ -150,7 +157,8 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
   : Action(params),
     _boundary_names(getParam<std::vector<BoundaryName>>("boundary")),
     _view_factor_calculator(getParam<MooseEnum>("view_factor_calculator")),
-    _add_heat_flux_aux(getParam<bool>("add_heat_flux_aux"))
+    _add_heat_flux_aux(getParam<bool>("add_heat_flux_aux")),
+    _create_patch_sidesets(getParam<bool>("create_patch_sidesets"))
 {
   const auto & symmetry_names = getParam<std::vector<BoundaryName>>("symmetry_boundary");
 
@@ -197,20 +205,31 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
                "vacuum_ray_tracing, because the radiation that escapes to the environment must not "
                "be redistributed among the participating surfaces.");
 
-  if (_view_factor_calculator == "vacuum_ray_tracing")
-  {
-    const auto n_patches = getParam<std::vector<unsigned int>>("n_patches");
-    if (n_patches.size() != _boundary_names.size())
-      paramError("n_patches", "The number of entries must match the number of entries in 'boundary'.");
+  const auto & n_patches = getParam<std::vector<unsigned int>>("n_patches");
+  if (n_patches.size() != _boundary_names.size())
+    paramError("n_patches",
+               "The number of entries must match the number of entries in 'boundary'.");
+
+  if (!_create_patch_sidesets && _view_factor_calculator != "vacuum_ray_tracing")
     for (const auto j : index_range(_boundary_names))
-      if (n_patches[j] != 1 && isNumericString(_boundary_names[j]))
+      if (n_patches[j] != 1)
+        paramError("create_patch_sidesets",
+                   "Internal patches are only supported with view_factor_calculator = "
+                   "vacuum_ray_tracing. Set create_patch_sidesets = true to split boundary '",
+                   _boundary_names[j],
+                   "' into ",
+                   n_patches[j],
+                   " patch sidesets.");
+
+  if (_view_factor_calculator == "vacuum_ray_tracing")
+    for (const auto j : index_range(_boundary_names))
+      if (_create_patch_sidesets && n_patches[j] != 1 && isNumericString(_boundary_names[j]))
         paramError("boundary",
                    "Boundary ",
                    _boundary_names[j],
                    " is specified by boundary ID. Patched boundaries (n_patches != 1) must be "
                    "given by name when using view_factor_calculator = vacuum_ray_tracing, because "
                    "the original sideset is removed from the mesh.");
-  }
 
   if (_add_heat_flux_aux)
   {
@@ -388,6 +407,19 @@ RadiationTransferAction::addRayStudyObject() const
   // set angular quadrature
   params.set<unsigned int>("polar_quad_order") = getParam<unsigned int>("polar_quad_order");
   params.set<unsigned int>("azimuthal_quad_order") = getParam<unsigned int>("azimuthal_quad_order");
+
+  // when the patches are internal, the study splits the boundaries itself
+  if (_view_factor_calculator == "vacuum_ray_tracing" && !_create_patch_sidesets)
+  {
+    params.set<std::vector<unsigned int>>("n_patches") =
+        getParam<std::vector<unsigned int>>("n_patches");
+    params.set<MultiMooseEnum>("partitioners") = patchPartitioners();
+
+    const auto & directions = getParam<MultiMooseEnum>("centroid_partitioner_directions");
+    if (directions.size())
+      params.set<MultiMooseEnum>("centroid_partitioner_directions") = directions;
+  }
+
   _problem->addUserObject(study_type, rayStudyName(), params);
 }
 
@@ -463,10 +495,25 @@ RadiationTransferAction::addRadiationObject() const
   params.set<std::vector<VariableName>>("temperature") = {getParam<VariableName>("temperature")};
 
   std::vector<FunctionName> extended_emissivity;
-  for (unsigned int j = 0; j < _boundary_names.size(); ++j)
-    for (unsigned int i = 0; i < nPatch(j); ++i)
-      extended_emissivity.push_back(emissivity[j]);
+  if (_create_patch_sidesets)
+    for (unsigned int j = 0; j < _boundary_names.size(); ++j)
+      for (unsigned int i = 0; i < nPatch(j); ++i)
+        extended_emissivity.push_back(emissivity[j]);
+  else
+    extended_emissivity = emissivity;
   params.set<std::vector<FunctionName>>("emissivity") = extended_emissivity;
+
+  // when the patches are internal, the radiation object splits the boundaries itself
+  if (!_create_patch_sidesets)
+  {
+    params.set<std::vector<unsigned int>>("n_patches") =
+        getParam<std::vector<unsigned int>>("n_patches");
+    params.set<MultiMooseEnum>("partitioners") = patchPartitioners();
+
+    const auto & directions = getParam<MultiMooseEnum>("centroid_partitioner_directions");
+    if (directions.size())
+      params.set<MultiMooseEnum>("centroid_partitioner_directions") = directions;
+  }
 
   // add boundary parameter
   params.set<std::vector<BoundaryName>>("boundary") = radiationPatchBoundaryNames();
@@ -542,6 +589,10 @@ RadiationTransferAction::radiationPatchNames() const
 bool
 RadiationTransferAction::isPatched(unsigned int j) const
 {
+  // the patches are indexed internally by the radiation objects
+  if (!_create_patch_sidesets)
+    return false;
+
   // in the vacuum (open geometry) calculation, a sideset with n_patches = 1 is not split
   if (_view_factor_calculator == "vacuum_ray_tracing" &&
       getParam<std::vector<unsigned int>>("n_patches")[j] == 1)
@@ -632,17 +683,13 @@ RadiationTransferAction::adiabaticPatchBoundaryNames() const
 void
 RadiationTransferAction::addMeshGenerator()
 {
+  if (!_create_patch_sidesets)
+    return;
+
   std::vector<unsigned int> n_patches = getParam<std::vector<unsigned int>>("n_patches");
 
-  MultiMooseEnum partitioners = getParam<MultiMooseEnum>("partitioners");
-  if (!_pars.isParamSetByUser("partitioners"))
-  {
-    partitioners.clearSetValues();
-    for (unsigned int j = 0; j < _boundary_names.size(); ++j)
-      partitioners.setAdditionalValue("metis");
-  }
-
-  MultiMooseEnum direction = getParam<MultiMooseEnum>("centroid_partitioner_directions");
+  const MultiMooseEnum partitioners = patchPartitioners();
+  const MultiMooseEnum direction = getParam<MultiMooseEnum>("centroid_partitioner_directions");
 
   // check input parameters
   if (_boundary_names.size() != n_patches.size())
@@ -707,6 +754,19 @@ RadiationTransferAction::nPatch(unsigned int j) const
   if (!psg)
     mooseError("Failed to convert mesh generator ", mg->name(), " to PatchSidesetGenerator.");
   return psg->nPatches();
+}
+
+MultiMooseEnum
+RadiationTransferAction::patchPartitioners() const
+{
+  MultiMooseEnum partitioners = getParam<MultiMooseEnum>("partitioners");
+  if (!_pars.isParamSetByUser("partitioners"))
+  {
+    partitioners.clearSetValues();
+    for (unsigned int j = 0; j < _boundary_names.size(); ++j)
+      partitioners.setAdditionalValue("metis");
+  }
+  return partitioners;
 }
 
 MeshGeneratorName

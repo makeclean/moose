@@ -77,6 +77,7 @@
     boundary = '4 5 6 7'
     emissivity = '0.9 0.8 0.4 1'
     n_patches = '2 2 2 3'
+    create_patch_sidesets = true
     partitioners = 'centroid centroid centroid centroid'
     centroid_partitioner_directions = 'x y y x'
     temperature = temperature

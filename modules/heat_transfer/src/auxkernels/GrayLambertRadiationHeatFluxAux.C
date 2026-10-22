@@ -34,5 +34,5 @@ GrayLambertRadiationHeatFluxAux::GrayLambertRadiationHeatFluxAux(const InputPara
 Real
 GrayLambertRadiationHeatFluxAux::computeValue()
 {
-  return -_glsr_uo.getSurfaceHeatFluxDensity(_current_boundary_id);
+  return -_glsr_uo.getSurfaceHeatFluxDensity(*_current_elem, _current_side);
 }

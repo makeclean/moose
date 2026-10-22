@@ -22,6 +22,10 @@ class ViewFactorMatrix;
 /**
  * GrayLambertSurfaceRadiationBase computes the heat flux on a set of surfaces
  * in radiative heat transfer with each other.
+ *
+ * The surfaces are the patches of the participating boundaries. The patches are either materialized
+ * as sidesets (in which case every sideset is one surface) or indexed internally, in which case the
+ * boundaries listed in 'boundary' are split into 'n_patches' patches each.
  */
 class GrayLambertSurfaceRadiationBase : public SideUserObject
 {
@@ -44,7 +48,8 @@ public:
     ADIABATIC = 8
   };
 
-  ///@{ public interface of this UserObject
+  ///@{ public interface of this UserObject; boundary-keyed quantities are area-weighted
+  ///    averages over the patches of the boundary when the patches are internal
   Real getSurfaceIrradiation(BoundaryID id) const;
   Real getSurfaceHeatFluxDensity(BoundaryID id) const;
   Real getSurfaceTemperature(BoundaryID id) const;
@@ -52,6 +57,13 @@ public:
   Real getSurfaceEmissivity(BoundaryID id) const;
   Real getViewFactor(BoundaryID from_id, BoundaryID to_id) const;
   std::set<BoundaryID> getSurfaceIDs() const;
+  ///@}
+
+  ///@{ per-patch quantities, for applying a flux on the side that is being integrated
+  unsigned int surfaceIndex(const libMesh::Elem & elem, unsigned int side) const;
+  Real getSurfaceIrradiation(const libMesh::Elem & elem, unsigned int side) const;
+  Real getSurfaceHeatFluxDensity(const libMesh::Elem & elem, unsigned int side) const;
+  Real getSurfaceEmissivity(const libMesh::Elem & elem, unsigned int side) const;
   ///@}
 
 protected:
@@ -66,6 +78,12 @@ protected:
   /// Gets the index within \c _side_id_index of the given boundary ID
   unsigned int getSideIDIndex(BoundaryID id) const;
 
+  /// Gets the parameter index of the given boundary ID
+  unsigned int getBoundaryIndex(BoundaryID id) const;
+
+  /// The surface index range [begin, end) of the boundary with parameter index \p j
+  std::pair<unsigned int, unsigned int> surfaceRange(unsigned int j) const;
+
   /// Stefan-Boltzmann constant
   const Real _sigma_stefan_boltzmann;
 
@@ -75,7 +93,28 @@ protected:
   /// the coupled temperature variable
   const VariableValue & _temperature;
 
-  /// side id to index map, side ids can have holes or be out of order
+  /// the participating boundary ids, in the order of the 'boundary' parameter
+  std::vector<BoundaryID> _boundary_ids;
+
+  /// map from boundary id to the index in the 'boundary' parameter
+  std::map<BoundaryID, unsigned int> _boundary_index;
+
+  /// whether the participating boundaries are split into patches internally
+  bool _internal_patches;
+
+  /// the number of patches of each participating boundary
+  std::vector<unsigned int> _n_patches_per_boundary;
+
+  /// the first surface index of each participating boundary
+  std::vector<unsigned int> _surface_offsets;
+
+  /// the index in the 'boundary' parameter of each surface
+  std::vector<unsigned int> _surface_boundary;
+
+  /// (element id, side) to surface index map, only filled for internal patches
+  std::map<std::pair<dof_id_type, unsigned int>, unsigned int> _side_surface;
+
+  /// the fixed temperature function of each surface, null if the surface is not isothermal
   std::vector<const Function *> _fixed_side_temperature;
 
   /// the radiosity of each surface
@@ -111,11 +150,8 @@ protected:
   /// the temperature of the environment if it is a black body
   const Function * _environment_temperature;
 
-  /// constant emissivity for each boundary
+  /// constant emissivity for each surface
   std::vector<const Function *> _emissivity;
-
-  /// side id to index map for isothermal boundaries, side ids can have holes or be out of order
-  std::map<unsigned int, unsigned int> _fixed_side_id_index;
 
   /// the set of adiabatic boundaries
   std::set<unsigned int> _adiabatic_side_ids;

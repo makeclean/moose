@@ -36,6 +36,21 @@ public:
   /// The fraction of radiation leaving this boundary that escapes to the environment
   virtual Real getEscapeFraction(BoundaryID id) const override;
 
+  /// The fraction of radiation leaving a surface that escapes to the environment
+  virtual Real getEscapeFraction(unsigned int surface) const override;
+
+  /// The surfaces are the patches the study splits the boundaries into
+  virtual bool usesInternalPatches() const override { return true; }
+
+  /// The index of the patch that contains the given mesh side
+  virtual unsigned int surfaceIndex(const libMesh::Elem & elem, unsigned int side) const override;
+
+  /// A name for a patch, derived from its boundary name and patch index
+  virtual std::string surfaceName(unsigned int surface) const override;
+
+  /// The boundary id a patch belongs to
+  virtual BoundaryID surfaceBoundaryID(unsigned int surface) const override;
+
 protected:
   /// A purely virtual function called in finalize; fills in the view factors and
   /// escape fractions from the ray tracing study

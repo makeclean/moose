@@ -40,11 +40,13 @@ Real
 GrayLambertNeumannBC::computeQpResidual()
 {
   if (!_reconstruct_emission)
-    return _test[_i][_qp] * _glsr_uo.getSurfaceHeatFluxDensity(_current_boundary_id);
+    return _test[_i][_qp] *
+           _glsr_uo.getSurfaceHeatFluxDensity(*_current_elem, _current_side);
 
-  Real eps = _glsr_uo.getSurfaceEmissivity(_current_boundary_id);
+  Real eps = _glsr_uo.getSurfaceEmissivity(*_current_elem, _current_side);
   Real emission = _sigma_stefan_boltzmann * MathUtils::pow(_u[_qp], 4);
-  return _test[_i][_qp] * eps * (emission - _glsr_uo.getSurfaceIrradiation(_current_boundary_id));
+  return _test[_i][_qp] * eps *
+         (emission - _glsr_uo.getSurfaceIrradiation(*_current_elem, _current_side));
 }
 
 Real
@@ -52,6 +54,6 @@ GrayLambertNeumannBC::computeQpJacobian()
 {
   // this is not the exact Jacobian but it ensures correct scaling
   return _test[_i][_qp] * _sigma_stefan_boltzmann *
-         _glsr_uo.getSurfaceEmissivity(_current_boundary_id) * 4 * MathUtils::pow(_u[_qp], 3) *
-         _phi[_j][_qp];
+         _glsr_uo.getSurfaceEmissivity(*_current_elem, _current_side) * 4 *
+         MathUtils::pow(_u[_qp], 3) * _phi[_j][_qp];
 }

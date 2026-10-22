@@ -60,6 +60,9 @@ protected:
   /// provides the updated number of patches for this boundary
   unsigned int nPatch(unsigned int j) const;
 
+  /// the partitioner to use for each boundary
+  MultiMooseEnum patchPartitioners() const;
+
   /// the boundary names participating in the radiative heat transfer
   const std::vector<BoundaryName> _boundary_names;
 
@@ -68,6 +71,8 @@ protected:
 
   /// Whether to add heat flux aux
   const bool _add_heat_flux_aux;
+  /// Whether the patches are materialized as sidesets on the mesh
+  const bool _create_patch_sidesets;
   /// Heat flux aux name
   VariableName _heat_flux_variable;
   /// Blocks to use for heat flux aux

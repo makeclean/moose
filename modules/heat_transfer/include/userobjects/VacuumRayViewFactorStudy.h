@@ -11,6 +11,7 @@
 
 #include "SideUserObject.h"
 #include "ViewFactorMatrix.h"
+#include "SideSetPatch.h"
 
 #ifdef MOOSE_XDG_ENABLED
 #include "RayTracingAngularQuadrature.h"
@@ -31,12 +32,14 @@
  *
  * The mesh (which must be three-dimensional and serial/replicated) is passed to
  * XDG as a single-volume model. XDG builds a surface for each sideset and an
- * implicit complement volume for the void around the mesh. For every face and
- * angular quadrature direction of a participating boundary, a ray is fired into
- * the void; the first surface it hits receives the associated weight
- * (JxW * (normal . direction) * angular weight), a miss contributes the weight
- * to the escape fraction of the emitting boundary. The weights are normalized
- * by the boundary area times pi in VacuumRayViewFactor.
+ * implicit complement volume for the void around the mesh. Every participating
+ * sideset is split into patches internally (one patch per face in facet mode), so
+ * no patch sidesets have to be added to the mesh. For every face and angular
+ * quadrature direction of a participating boundary, a ray is fired into the void;
+ * the first surface it hits receives the associated weight
+ * (JxW * (normal . direction) * angular weight), a miss contributes the weight to
+ * the escape fraction of the emitting patch. The weights are normalized by the
+ * patch area times pi in VacuumRayViewFactor.
  *
  * This object is not a RayTracingStudy and does not use the ray tracing module
  * of MOOSE; ray tracing is performed by XDG/Embree.
@@ -53,21 +56,32 @@ public:
   void execute() override;
   void finalize() override;
 
-  /// The MPI-summed weight of rays leaving \p from_id that arrive at \p to_id
-  Real viewFactorWeight(BoundaryID from_id, BoundaryID to_id) const;
+  /// Number of patches (surfaces) over all participating boundaries
+  unsigned int nSurfaces() const { return _n_surfaces; }
 
-  /// The MPI-summed weights of rays leaving \p from_id, as (boundary index, weight)
-  /// pairs sorted by index
-  const std::vector<ViewFactorMatrix::Entry> & viewFactorRow(BoundaryID from_id) const;
+  /// The index of the patch that contains the given mesh side
+  unsigned int surfaceIndex(const libMesh::Elem & elem, unsigned int side) const;
 
-  /// The MPI-summed weight of rays leaving \p from_id that escape to the environment
-  Real escapeWeight(BoundaryID from_id) const;
+  /// The index of the patch that contains the given XDG face
+  unsigned int surfaceIndex(xdg::MeshID face) const;
+
+  /// The participating boundary id a patch belongs to
+  BoundaryID surfaceBoundaryID(unsigned int surface) const;
+
+  /// A name for a patch, derived from its boundary name and patch index
+  std::string surfaceName(unsigned int surface) const;
+
+  /// The MPI-summed weight of rays leaving \p from surface that arrive at \p to surface
+  Real viewFactorWeight(unsigned int from, unsigned int to) const;
+
+  /// The MPI-summed weights of rays leaving \p from, as (surface index, weight) pairs
+  const std::vector<ViewFactorMatrix::Entry> & viewFactorRow(unsigned int from) const;
+
+  /// The MPI-summed weight of rays leaving \p from that escape to the environment
+  Real escapeWeight(unsigned int from) const;
 
 protected:
   void threadJoin(const UserObject & y) override;
-
-  /// The local index of a participating boundary id
-  unsigned int boundaryIndex(BoundaryID id) const;
 
   /// the participating boundary ids, in the order given by the boundary parameter
   std::vector<BoundaryID> _boundary_ids;
@@ -77,6 +91,18 @@ protected:
 
   /// number of participating boundaries
   unsigned int _n_boundaries;
+
+  /// the patch subdivision of each participating boundary
+  std::vector<std::unique_ptr<SideSetPatch>> _patches;
+
+  /// the first surface index of each participating boundary
+  std::vector<unsigned int> _surface_offsets;
+
+  /// the participating boundary (parameter order) of each surface
+  std::vector<unsigned int> _surface_boundary;
+
+  /// number of surfaces (patches) over all participating boundaries
+  unsigned int _n_surfaces;
 
   /// face finite element used to integrate the leaving radiation
   std::unique_ptr<FEBase> _fe_face;
@@ -102,12 +128,12 @@ protected:
   /// the implicit complement volume of the model, i.e. the void the rays travel through
   xdg::MeshID _void_volume;
 
-  /// map from an XDG surface id to the participating boundary id
-  std::map<xdg::MeshID, BoundaryID> _surface_to_boundary;
-
   /// map from the sorted node ids of a face to its XDG face id, used to exclude
   /// the emitting face from the ray trace
   std::map<std::vector<dof_id_type>, xdg::MeshID> _face_id_by_node_ids;
+
+  /// map from an XDG face id to the patch (surface) that contains it
+  std::map<xdg::MeshID, unsigned int> _surface_by_face;
 
   /// distance by which ray origins are nudged off the emitting surface
   Real _bump;

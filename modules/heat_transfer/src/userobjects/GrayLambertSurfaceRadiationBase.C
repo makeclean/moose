@@ -9,10 +9,13 @@
 
 #include "GrayLambertSurfaceRadiationBase.h"
 #include "ViewFactorMatrix.h"
+#include "SideSetPatch.h"
 #include "MathUtils.h"
 #include "Function.h"
+#include "MooseMesh.h"
 #include "libmesh/quadrature.h"
 #include "libmesh/petsc_solver_exception.h"
+#include "libmesh/utility.h"
 
 #include <petscksp.h>
 #include <cmath>
@@ -37,6 +40,26 @@ GrayLambertSurfaceRadiationBase::validParams()
   params.addParam<std::vector<BoundaryName>>(
       "adiabatic_boundary", {}, "The list of boundary IDs from the mesh that are adiabatic.");
 
+  params.addParam<std::vector<unsigned int>>(
+      "n_patches",
+      {},
+      "Number of patches per boundary. If empty, every boundary listed in 'boundary' is a single "
+      "surface. If zero, one patch is created for every face of the boundary. The patches then "
+      "replace the patches materialized as sidesets and are indexed internally.");
+
+  MultiMooseEnum partitioning(
+      "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc", "default");
+  partitioning.addValidName("grid");
+  params.addParam<MultiMooseEnum>(
+      "partitioners",
+      partitioning,
+      "The partitioner to use for splitting each boundary into patches.");
+
+  MultiMooseEnum direction("x y z radial");
+  params.addParam<MultiMooseEnum>("centroid_partitioner_directions",
+                                  direction,
+                                  "The sort direction if using the centroid partitioner.");
+
   MooseEnum environment("vacuum black_body", "vacuum");
   params.addParam<MooseEnum>(
       "environment",
@@ -58,20 +81,13 @@ GrayLambertSurfaceRadiationBase::validParams()
 GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputParameters & parameters)
   : SideUserObject(parameters),
     _sigma_stefan_boltzmann(getParam<Real>("stefan_boltzmann_constant")),
-    _n_sides(boundaryIDs().size()),
+    _n_sides(0),
     _temperature(coupledValue("temperature")),
-    _radiosity(_n_sides),
-    _heat_flux_density(_n_sides),
-    _side_temperature(_n_sides),
-    _side_type(_n_sides),
-    _areas(_n_sides),
-    _beta(_n_sides),
-    _surface_irradiation(_n_sides),
-    _escape_fractions(_n_sides, 0),
+    _internal_patches(false),
     _environment(getParam<MooseEnum>("environment")),
     _environment_temperature(isParamSetByUser("environment_temperature")
                                  ? &getFunctionByName(
-                                        getParam<FunctionName>("environment_temperature"))
+                                       getParam<FunctionName>("environment_temperature"))
                                  : nullptr),
     _view_factors(nullptr),
     _mat(nullptr),
@@ -80,94 +96,141 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
     _rhs(nullptr),
     _radiosity_vec(nullptr)
 {
-  // get emissivity functions
-  auto & eps_names = getParam<std::vector<FunctionName>>("emissivity");
-  _emissivity.resize(eps_names.size());
-  for (unsigned int j = 0; j < _emissivity.size(); ++j)
-    _emissivity[j] = &getFunctionByName(eps_names[j]);
+  const std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
+  for (const auto & name : boundary_names)
+    if (name == "ANY_BOUNDARY_ID")
+      paramError("boundary", "boundary must be explicitly provided.");
 
-  // set up the map from the side id to the local index & check
-  // note that boundaryIDs is not in the right order anymore!
+  // the patches are either sidesets of the mesh or internal; when they are internal the number of
+  // patches per boundary is given by the action
+  std::vector<unsigned int> n_patches = getParam<std::vector<unsigned int>>("n_patches");
+  _internal_patches = !n_patches.empty();
+  if (_internal_patches && n_patches.size() != boundary_names.size())
+    paramError("n_patches", "The number of entries must match the number of boundary entries.");
+  if (!_internal_patches)
+    n_patches.assign(boundary_names.size(), 1);
+
+  const MultiMooseEnum & partitioners = getParam<MultiMooseEnum>("partitioners");
+  const MultiMooseEnum & directions = getParam<MultiMooseEnum>("centroid_partitioner_directions");
+  if (_internal_patches)
   {
-    std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
-
-    for (unsigned int j = 0; j < boundary_names.size(); ++j)
-    {
-      if (boundary_names[j] == "ANY_BOUNDARY_ID")
-        paramError("boundary", "boundary must be explicitly provided.");
-
-      _side_id_index[_mesh.getBoundaryID(boundary_names[j])] = j;
-      _side_type[j] = VARIABLE_TEMPERATURE;
-    }
-
-    // consistency check on emissivity, must be as many entries as boundary
-    if (boundary_names.size() != _emissivity.size())
-      paramError("emissivity", "The number of entries must match the number of boundary entries.");
+    if (partitioners.size() != 0 && partitioners.size() != boundary_names.size())
+      paramError("partitioners",
+                 "The number of entries must match the number of boundary entries.");
+    if (directions.size() != 0 && directions.size() != boundary_names.size())
+      paramError("centroid_partitioner_directions",
+                 "The number of entries must match the number of boundary entries.");
   }
+
+  // split the boundaries into patches and build the boundary/side to surface maps
+  unsigned int offset = 0;
+  for (const auto j : index_range(boundary_names))
+  {
+    const BoundaryID id = _mesh.getBoundaryID(boundary_names[j]);
+    _boundary_ids.push_back(id);
+    _boundary_index[id] = j;
+    _side_id_index[id] = offset;
+    _surface_offsets.push_back(offset);
+
+    if (_internal_patches)
+    {
+      const SideSetPatch patches(_mesh.getMesh(),
+                                 id,
+                                 n_patches[j],
+                                 partitioners.size() ? partitioners[j] : "metis",
+                                 directions.size() ? directions[j] : "");
+      _n_patches_per_boundary.push_back(patches.nPatches());
+      for (const auto & [side, patch] : patches.patchIndices())
+        _side_surface[side] = offset + patch;
+    }
+    else
+      _n_patches_per_boundary.push_back(1);
+
+    _surface_boundary.insert(_surface_boundary.end(), _n_patches_per_boundary.back(), j);
+    offset += _n_patches_per_boundary.back();
+  }
+  _n_sides = offset;
+
+  // size the per-surface data
+  _fixed_side_temperature.assign(_n_sides, nullptr);
+  _radiosity.resize(_n_sides);
+  _heat_flux_density.resize(_n_sides);
+  _side_temperature.resize(_n_sides);
+  _side_type.assign(_n_sides, VARIABLE_TEMPERATURE);
+  _areas.resize(_n_sides);
+  _beta.resize(_n_sides);
+  _surface_irradiation.resize(_n_sides);
+  _escape_fractions.assign(_n_sides, 0);
+
+  // get emissivity functions, one per surface
+  const auto & eps_names = getParam<std::vector<FunctionName>>("emissivity");
+  if (eps_names.size() != boundary_names.size())
+    paramError("emissivity", "The number of entries must match the number of boundary entries.");
+
+  if (_internal_patches)
+    for (const auto j : index_range(eps_names))
+    {
+      const auto & function = getFunctionByName(eps_names[j]);
+      _emissivity.insert(_emissivity.end(), _n_patches_per_boundary[j], &function);
+    }
+  else
+    for (const auto & name : eps_names)
+      _emissivity.push_back(&getFunctionByName(name));
 
   // get the fixed boundaries of the system if any are provided
   if (isParamValid("fixed_temperature_boundary"))
   {
-    // if fixed_temperature_boundary is valid, then fixed_side_temperatures must be
-    // valid, too
     if (!isParamValid("fixed_boundary_temperatures"))
       paramError("fixed_boundary_temperatures",
                  "fixed_temperature_boundary is provided, but fixed_boundary_temperatures is not.");
 
-    auto fst_fn = getParam<std::vector<FunctionName>>("fixed_boundary_temperatures");
-    for (auto & fn : fst_fn)
-      _fixed_side_temperature.push_back(&getFunctionByName(fn));
+    const auto & fixed_names = getParam<std::vector<BoundaryName>>("fixed_temperature_boundary");
+    const auto & fixed_functions =
+        getParam<std::vector<FunctionName>>("fixed_boundary_temperatures");
 
-    // get the fixed boundaries and temperatures
-    std::vector<BoundaryName> boundary_names =
-        getParam<std::vector<BoundaryName>>("fixed_temperature_boundary");
-
-    if (boundary_names.size() != _fixed_side_temperature.size())
+    if (fixed_names.size() != fixed_functions.size())
       paramError(
           "fixed_boundary_temperatures",
           "fixed_boundary_temperatures and fixed_temperature_boundary must have the same length.");
 
-    unsigned int index = 0;
-    for (auto & name : boundary_names)
+    for (const auto k : index_range(fixed_names))
     {
-      _fixed_side_id_index[_mesh.getBoundaryID(name)] = index;
-      index++;
-    }
-
-    // check that fixed side ids is a subset of boundary ids
-    // and update _side_type info
-    for (auto & p : _fixed_side_id_index)
-    {
-      if (_side_id_index.find(p.first) == _side_id_index.end())
+      const auto it = _boundary_index.find(_mesh.getBoundaryID(fixed_names[k]));
+      if (it == _boundary_index.end())
         paramError("fixed_temperature_boundary",
                    "fixed_temperature_boundary must be a subset of boundary.");
-      _side_type[_side_id_index.find(p.first)->second] = FIXED_TEMPERATURE;
+
+      const auto [begin, end] = surfaceRange(it->second);
+      const Function * const function = &getFunctionByName(fixed_functions[k]);
+      for (const auto i : make_range(begin, end))
+      {
+        _side_type[i] = FIXED_TEMPERATURE;
+        _fixed_side_temperature[i] = function;
+      }
     }
   }
 
-  // get the fixed boundaries of the system if any are provided
+  // get the adiabatic boundaries of the system if any are provided
   if (isParamValid("adiabatic_boundary"))
   {
-    // get the adiabatic boundaries and temperatures
-    std::vector<BoundaryName> boundary_names =
-        getParam<std::vector<BoundaryName>>("adiabatic_boundary");
-
-    for (auto & name : boundary_names)
-      _adiabatic_side_ids.insert(_mesh.getBoundaryID(name));
-
-    // check that adiabatic side ids is a subset of boundary ids
-    // and update _side_type info
-    for (auto & id : _adiabatic_side_ids)
+    for (const auto & name : getParam<std::vector<BoundaryName>>("adiabatic_boundary"))
     {
-      if (_side_id_index.find(id) == _side_id_index.end())
+      const BoundaryID id = _mesh.getBoundaryID(name);
+      const auto it = _boundary_index.find(id);
+      if (it == _boundary_index.end())
         paramError("adiabatic_boundary", "adiabatic_boundary must be a subset of boundary.");
-      _side_type[_side_id_index.find(id)->second] = ADIABATIC;
-    }
 
-    // make sure that adiabatic boundaries are not already fixed boundaries
-    for (auto & id : _adiabatic_side_ids)
-      if (_fixed_side_id_index.find(id) != _fixed_side_id_index.end())
-        paramError("adiabatic_boundary", "Isothermal boundary cannot also be adiabatic boundary.");
+      _adiabatic_side_ids.insert(id);
+
+      const auto [begin, end] = surfaceRange(it->second);
+      for (const auto i : make_range(begin, end))
+      {
+        if (_side_type[i] == FIXED_TEMPERATURE)
+          paramError("adiabatic_boundary",
+                     "Isothermal boundary cannot also be adiabatic boundary.");
+        _side_type[i] = ADIABATIC;
+      }
+    }
   }
 
   // check that the environment parameters are consistent
@@ -189,12 +252,37 @@ GrayLambertSurfaceRadiationBase::~GrayLambertSurfaceRadiationBase()
     LibmeshPetscCall(VecDestroy(&_radiosity_vec));
 }
 
+unsigned int
+GrayLambertSurfaceRadiationBase::surfaceIndex(const libMesh::Elem & elem,
+                                              const unsigned int side) const
+{
+  if (_internal_patches)
+    return libmesh_map_find(_side_surface, std::make_pair(elem.id(), side));
+
+  // the surfaces are sidesets, so the surface is the boundary the side belongs to
+  std::vector<BoundaryID> ids;
+  _mesh.getMesh().get_boundary_info().boundary_ids(&elem, side, ids);
+  for (const auto id : ids)
+  {
+    const auto it = _side_id_index.find(id);
+    if (it != _side_id_index.end())
+      return it->second;
+  }
+
+  mooseError("Side ",
+             side,
+             " of element ",
+             elem.id(),
+             " does not belong to any of the participating boundaries.");
+}
+
 void
 GrayLambertSurfaceRadiationBase::execute()
 {
-  mooseAssert(_side_id_index.find(_current_boundary_id) != _side_id_index.end(),
-              "Current boundary id not in _side_id_index.");
-  unsigned int index = _side_id_index.find(_current_boundary_id)->second;
+  const unsigned int index =
+      _internal_patches ? libmesh_map_find(_side_surface,
+                                           std::make_pair(_current_elem->id(), _current_side))
+                        : getSideIDIndex(_current_boundary_id);
 
   for (unsigned int qp = 0; qp < _qrule->n_points(); qp++)
   {
@@ -207,8 +295,9 @@ GrayLambertSurfaceRadiationBase::execute()
       temp = _temperature[qp];
     else if (_side_type[index] == FIXED_TEMPERATURE)
     {
-      unsigned int iso_index = _fixed_side_id_index.find(_current_boundary_id)->second;
-      temp = _fixed_side_temperature[iso_index]->value(_t, _q_point[qp]);
+      const Function * const function = _fixed_side_temperature[index];
+      mooseAssert(function, "Fixed temperature surface without a temperature function.");
+      temp = function->value(_t, _q_point[qp]);
     }
 
     _beta[index] += _JxW[qp] * _coord[qp] * _sigma_stefan_boltzmann *
@@ -429,39 +518,149 @@ GrayLambertSurfaceRadiationBase::getSideIDIndex(BoundaryID id) const
   return it->second;
 }
 
-Real
-GrayLambertSurfaceRadiationBase::getSurfaceIrradiation(BoundaryID id) const
+unsigned int
+GrayLambertSurfaceRadiationBase::getBoundaryIndex(const BoundaryID id) const
 {
-  return _surface_irradiation[getSideIDIndex(id)];
+  const auto it = _boundary_index.find(id);
+  if (it == _boundary_index.end())
+    mooseError("Sideset ID ", id, " (", _mesh.getBoundaryName(id), ") not found in map.");
+  return it->second;
+}
+
+std::pair<unsigned int, unsigned int>
+GrayLambertSurfaceRadiationBase::surfaceRange(const unsigned int j) const
+{
+  return {_surface_offsets[j], _surface_offsets[j] + _n_patches_per_boundary[j]};
 }
 
 Real
-GrayLambertSurfaceRadiationBase::getSurfaceHeatFluxDensity(BoundaryID id) const
+GrayLambertSurfaceRadiationBase::getSurfaceIrradiation(const BoundaryID id) const
 {
-  return _heat_flux_density[getSideIDIndex(id)];
+  if (!_internal_patches)
+    return _surface_irradiation[getSideIDIndex(id)];
+
+  const auto [begin, end] = surfaceRange(getBoundaryIndex(id));
+  Real value = 0;
+  Real area = 0;
+  for (const auto i : make_range(begin, end))
+  {
+    value += _surface_irradiation[i] * _areas[i];
+    area += _areas[i];
+  }
+  return value / area;
 }
 
 Real
-GrayLambertSurfaceRadiationBase::getSurfaceTemperature(BoundaryID id) const
+GrayLambertSurfaceRadiationBase::getSurfaceHeatFluxDensity(const BoundaryID id) const
 {
-  return _side_temperature[getSideIDIndex(id)];
+  if (!_internal_patches)
+    return _heat_flux_density[getSideIDIndex(id)];
+
+  const auto [begin, end] = surfaceRange(getBoundaryIndex(id));
+  Real value = 0;
+  Real area = 0;
+  for (const auto i : make_range(begin, end))
+  {
+    value += _heat_flux_density[i] * _areas[i];
+    area += _areas[i];
+  }
+  return value / area;
 }
 
 Real
-GrayLambertSurfaceRadiationBase::getSurfaceRadiosity(BoundaryID id) const
+GrayLambertSurfaceRadiationBase::getSurfaceTemperature(const BoundaryID id) const
 {
-  return _radiosity[getSideIDIndex(id)];
+  if (!_internal_patches)
+    return _side_temperature[getSideIDIndex(id)];
+
+  const auto [begin, end] = surfaceRange(getBoundaryIndex(id));
+  Real value = 0;
+  Real area = 0;
+  for (const auto i : make_range(begin, end))
+  {
+    value += _side_temperature[i] * _areas[i];
+    area += _areas[i];
+  }
+  return value / area;
 }
 
 Real
-GrayLambertSurfaceRadiationBase::getSurfaceEmissivity(BoundaryID id) const
+GrayLambertSurfaceRadiationBase::getSurfaceRadiosity(const BoundaryID id) const
 {
-  const auto ind = getSideIDIndex(id);
-  return _emissivity[ind]->value(_side_temperature[ind], Point());
+  if (!_internal_patches)
+    return _radiosity[getSideIDIndex(id)];
+
+  const auto [begin, end] = surfaceRange(getBoundaryIndex(id));
+  Real value = 0;
+  Real area = 0;
+  for (const auto i : make_range(begin, end))
+  {
+    value += _radiosity[i] * _areas[i];
+    area += _areas[i];
+  }
+  return value / area;
 }
 
 Real
-GrayLambertSurfaceRadiationBase::getViewFactor(BoundaryID from_id, BoundaryID to_id) const
+GrayLambertSurfaceRadiationBase::getSurfaceEmissivity(const BoundaryID id) const
 {
-  return _view_factors->get(getSideIDIndex(from_id), getSideIDIndex(to_id));
+  if (!_internal_patches)
+  {
+    const auto ind = getSideIDIndex(id);
+    return _emissivity[ind]->value(_side_temperature[ind], Point());
+  }
+
+  const auto [begin, end] = surfaceRange(getBoundaryIndex(id));
+  Real value = 0;
+  Real area = 0;
+  for (const auto i : make_range(begin, end))
+  {
+    value += _emissivity[i]->value(_side_temperature[i], Point()) * _areas[i];
+    area += _areas[i];
+  }
+  return value / area;
+}
+
+Real
+GrayLambertSurfaceRadiationBase::getViewFactor(const BoundaryID from_id,
+                                              const BoundaryID to_id) const
+{
+  if (!_internal_patches)
+    return _view_factors->get(getSideIDIndex(from_id), getSideIDIndex(to_id));
+
+  // the view factor between two boundaries is the area-weighted average of the view factors
+  // between their patches
+  const auto [from_begin, from_end] = surfaceRange(getBoundaryIndex(from_id));
+  const auto [to_begin, to_end] = surfaceRange(getBoundaryIndex(to_id));
+  Real value = 0;
+  Real area = 0;
+  for (const auto i : make_range(from_begin, from_end))
+  {
+    area += _areas[i];
+    for (const auto j : make_range(to_begin, to_end))
+      value += _view_factors->get(i, j) * _areas[i];
+  }
+  return value / area;
+}
+
+Real
+GrayLambertSurfaceRadiationBase::getSurfaceIrradiation(const libMesh::Elem & elem,
+                                                       const unsigned int side) const
+{
+  return _surface_irradiation[surfaceIndex(elem, side)];
+}
+
+Real
+GrayLambertSurfaceRadiationBase::getSurfaceHeatFluxDensity(const libMesh::Elem & elem,
+                                                           const unsigned int side) const
+{
+  return _heat_flux_density[surfaceIndex(elem, side)];
+}
+
+Real
+GrayLambertSurfaceRadiationBase::getSurfaceEmissivity(const libMesh::Elem & elem,
+                                                      const unsigned int side) const
+{
+  const auto index = surfaceIndex(elem, side);
+  return _emissivity[index]->value(_side_temperature[index], Point());
 }

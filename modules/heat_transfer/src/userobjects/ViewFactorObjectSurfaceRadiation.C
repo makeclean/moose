@@ -38,6 +38,14 @@ ViewFactorObjectSurfaceRadiation::setViewFactors()
 {
   const ViewFactorBase & view_factor_uo = getUserObject<ViewFactorBase>("view_factor_object_name");
 
+  // when the patches are internal, the surfaces of the view factor object and of this object are
+  // ordered the same way (boundary by boundary, patch by patch), so no permutation is needed
+  if (view_factor_uo.usesInternalPatches())
+  {
+    _vf_matrix = view_factor_uo.viewFactorMatrix();
+    return &_vf_matrix;
+  }
+
   // this object and the view factor object may list their boundaries in different orders, so
   // the view factor entries are permuted into this object's ordering
   const auto & vf_names = view_factor_uo.boundaryNames();
@@ -64,9 +72,17 @@ std::vector<Real>
 ViewFactorObjectSurfaceRadiation::setEscapeFractions()
 {
   const ViewFactorBase & view_factor_uo = getUserObject<ViewFactorBase>("view_factor_object_name");
-  std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
   std::vector<Real> esc(_n_sides, 0);
-  for (unsigned int i = 0; i < _n_sides; ++i)
-    esc[i] = view_factor_uo.getEscapeFraction(_mesh.getBoundaryID(boundary_names[i]));
+
+  if (view_factor_uo.usesInternalPatches())
+    for (const auto i : make_range(_n_sides))
+      esc[i] = view_factor_uo.getEscapeFraction(i);
+  else
+  {
+    std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
+    for (unsigned int i = 0; i < _n_sides; ++i)
+      esc[i] = view_factor_uo.getEscapeFraction(_mesh.getBoundaryID(boundary_names[i]));
+  }
+
   return esc;
 }

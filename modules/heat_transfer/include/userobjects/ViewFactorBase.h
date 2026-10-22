@@ -38,9 +38,29 @@ public:
   const ViewFactorMatrix & viewFactorMatrix() const;
   ///@}
 
+  /// The number of surfaces (patches) the view factors are defined on. This is one per
+  /// boundary unless the derived object splits the boundaries into patches internally.
+  virtual unsigned int nSurfaces() const { return _n_sides; }
+
+  /// Whether the surfaces are patches that are indexed internally instead of separate
+  /// boundary ids
+  virtual bool usesInternalPatches() const { return false; }
+
+  /// The index of the surface that contains the given mesh side
+  virtual unsigned int surfaceIndex(const libMesh::Elem & elem, unsigned int side) const;
+
   /// The fraction of radiation leaving this boundary that escapes to the environment.
   /// The default is zero for closed geometries; open geometries override this.
   virtual Real getEscapeFraction(BoundaryID /*id*/) const { return 0; }
+
+  /// The escape fraction of a surface, by surface index
+  virtual Real getEscapeFraction(unsigned int /*surface*/) const { return 0; }
+
+  /// A name for a surface, used in reporting. Defaults to the boundary name.
+  virtual std::string surfaceName(unsigned int surface) const;
+
+  /// The boundary id a surface belongs to, used in reporting
+  virtual BoundaryID surfaceBoundaryID(unsigned int surface) const;
 
   virtual void initialize() override;
   virtual void execute() override;

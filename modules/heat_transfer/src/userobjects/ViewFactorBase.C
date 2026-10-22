@@ -78,6 +78,13 @@ ViewFactorBase::getViewFactor(BoundaryID from_id, BoundaryID to_id) const
 Real
 ViewFactorBase::getViewFactor(BoundaryName from_name, BoundaryName to_name) const
 {
+  // the view factors of an object with internal patches are indexed by patch, not by boundary;
+  // returning the entry of the first patch of each boundary would be misleading
+  if (_n_sides != boundaryNames().size())
+    mooseError("The view factors of this object are indexed by patch, not by boundary. Use "
+               "GrayLambertSurfaceRadiationBase::getViewFactor() to retrieve the area-weighted "
+               "view factor between two boundaries.");
+
   auto from = _side_name_index.find(from_name);
   auto to = _side_name_index.find(to_name);
   if (from == _side_name_index.end())
@@ -112,17 +119,48 @@ ViewFactorBase::initialize()
 void
 ViewFactorBase::execute()
 {
-  // compute areas
-  auto current_boundary_name = _mesh.getBoundaryName(_current_boundary_id);
-  auto it = _side_name_index.find(current_boundary_name);
-  if (it == _side_name_index.end())
-    mooseError("Current boundary name: ",
-               current_boundary_name,
-               " with id ",
-               _current_boundary_id,
-               " not in boundary parameter.");
+  // compute areas; internal patches are looked up by the side, because all patches of a
+  // boundary share the same boundary id
+  unsigned int index;
+  if (usesInternalPatches())
+    index = surfaceIndex(*_current_elem, _current_side);
+  else
+    index = getSideNameIndex(_mesh.getBoundaryName(_current_boundary_id));
 
-  _areas[it->second] += _current_side_volume;
+  _areas[index] += _current_side_volume;
+}
+
+unsigned int
+ViewFactorBase::surfaceIndex(const libMesh::Elem & elem, const unsigned int side) const
+{
+  // the default surface index is the index of the boundary the side belongs to
+  std::vector<boundary_id_type> ids;
+  _mesh.getMesh().get_boundary_info().boundary_ids(&elem, side, ids);
+  for (const auto id : ids)
+  {
+    const auto it = _side_name_index.find(_mesh.getBoundaryName(id));
+    if (it != _side_name_index.end())
+      return it->second;
+  }
+
+  mooseError("Side ",
+             side,
+             " of element ",
+             elem.id(),
+             " does not belong to any of the boundaries of this object.");
+}
+
+std::string
+ViewFactorBase::surfaceName(const unsigned int surface) const
+{
+  mooseAssert(surface < _n_sides, "Surface index out of range.");
+  return boundaryNames()[surface];
+}
+
+BoundaryID
+ViewFactorBase::surfaceBoundaryID(const unsigned int surface) const
+{
+  return _mesh.getBoundaryID(surfaceName(surface));
 }
 
 void
@@ -187,8 +225,7 @@ ViewFactorBase::maxDevRowSum() const
   for (unsigned int i = 0; i < _n_sides; ++i)
   {
     // the sum of the view factors and the escape fraction must equal one
-    auto name = boundaryNames()[i];
-    Real s = std::abs(1 - viewFactorRowSum(i) - getEscapeFraction(_mesh.getBoundaryID(name)));
+    Real s = std::abs(1 - viewFactorRowSum(i) - getEscapeFraction(i));
     if (s > v)
       v = s;
   }
@@ -212,13 +249,11 @@ ViewFactorBase::checkAndNormalizeViewFactor()
   if (_print_view_factor_info)
     for (unsigned int from = 0; from < _n_sides; ++from)
     {
-      auto from_name = boundaryNames()[from];
-      auto from_id = _mesh.getBoundaryID(from_name);
-      _console << "View factors from sideset " << from_name << " sum to "
-               << viewFactorRowSum(from) + getEscapeFraction(from_id) << " ("
+      auto from_name = surfaceName(from);
+      _console << "View factors from surface " << from_name << " sum to "
+               << viewFactorRowSum(from) + getEscapeFraction(from) << " ("
                << viewFactorRowSum(from) << " of which is a view factor, and "
-               << getEscapeFraction(from_id) << " is the escape fraction)."
-               << std::endl;
+               << getEscapeFraction(from) << " is the escape fraction)." << std::endl;
     }
 
   if (max_sum_deviation > _view_factor_tol)
@@ -259,22 +294,16 @@ ViewFactorBase::checkAndNormalizeViewFactor()
 
   if (_print_view_factor_info)
   {
-    // index -> name, so that printing a stored entry does not require a
-    // linear scan of _side_name_index
-    std::vector<std::string> names(_n_sides);
-    for (const auto & pair : _side_name_index)
-      names[pair.second] = pair.first;
-
     _console << "\nFinal view factors.\n" << std::endl;
     for (const auto from : make_range(_n_sides))
     {
-      const auto from_id = _mesh.getBoundaryID(names[from]);
+      const auto from_id = surfaceBoundaryID(from);
       // only the stored (nonzero) entries are printed
       for (const auto & [to, value] : _view_factors.row(from))
       {
-        const auto to_id = _mesh.getBoundaryID(names[to]);
-        _console << names[from] << " (" << from_id << ") -> " << names[to] << " (" << to_id
-                 << ") = " << value << std::endl;
+        const auto to_id = surfaceBoundaryID(to);
+        _console << surfaceName(from) << " (" << from_id << ") -> " << surfaceName(to) << " ("
+                 << to_id << ") = " << value << std::endl;
       }
     }
   }

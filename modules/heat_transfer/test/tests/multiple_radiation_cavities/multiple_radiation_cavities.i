@@ -86,6 +86,7 @@
     boundary = 'left_left left_right left_bottom left_top'
     emissivity = '0.8 0.8 0.9 0.5'
     n_patches = '2 2 2 2'
+    create_patch_sidesets = true
     temperature = temperature
     ray_tracing_face_order = SECOND
   []
@@ -94,6 +95,7 @@
     boundary = 'right_left right_right right_bottom right_top'
     emissivity = '0.8 0.8 0.9 0.5'
     n_patches = '2 2 2 2'
+    create_patch_sidesets = true
     temperature = temperature
     ray_tracing_face_order = SECOND
   []

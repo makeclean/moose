@@ -30,9 +30,7 @@ VacuumRayViewFactor::validParams()
 }
 
 VacuumRayViewFactor::VacuumRayViewFactor(const InputParameters & parameters)
-  : ViewFactorBase(parameters),
-    _study(getUserObject<VacuumRayViewFactorStudy>("ray_study_name")),
-    _escape_fractions(_n_sides, 0)
+  : ViewFactorBase(parameters), _study(getUserObject<VacuumRayViewFactorStudy>("ray_study_name"))
 {
   if (getParam<bool>("normalize_view_factor"))
     paramError("normalize_view_factor",
@@ -41,6 +39,12 @@ VacuumRayViewFactor::VacuumRayViewFactor(const InputParameters & parameters)
                "participating surfaces.");
   if (_mesh.dimension() != 3)
     mooseError("The vacuum view factor calculation only supports three-dimensional meshes.");
+
+  // the surfaces are the patches the study splits the participating boundaries into
+  _n_sides = _study.nSurfaces();
+  _areas.assign(_n_sides, 0);
+  _view_factors = ViewFactorMatrix(_n_sides);
+  _escape_fractions.assign(_n_sides, 0);
 }
 
 void
@@ -61,11 +65,9 @@ VacuumRayViewFactor::finalizeViewFactor()
   _view_factors.clear();
   for (const auto i : make_range(_n_sides))
   {
-    const auto from_name = boundaryNames()[i];
-    const BoundaryID from_id = _mesh.getBoundaryID(from_name);
     const Real normalization = 1. / (_areas[i] * libMesh::pi);
-    _escape_fractions[i] = _study.escapeWeight(from_id) * normalization;
-    for (const auto & [j, weight] : _study.viewFactorRow(from_id))
+    _escape_fractions[i] = _study.escapeWeight(i) * normalization;
+    for (const auto & [j, weight] : _study.viewFactorRow(i))
       if (weight != 0.0)
         _view_factors.add(i, j, weight * normalization);
   }
@@ -75,6 +77,30 @@ Real
 VacuumRayViewFactor::getEscapeFraction(BoundaryID id) const
 {
   return _escape_fractions[getSideNameIndex(_mesh.getBoundaryName(id))];
+}
+
+Real
+VacuumRayViewFactor::getEscapeFraction(const unsigned int surface) const
+{
+  return _escape_fractions[surface];
+}
+
+unsigned int
+VacuumRayViewFactor::surfaceIndex(const libMesh::Elem & elem, const unsigned int side) const
+{
+  return _study.surfaceIndex(elem, side);
+}
+
+std::string
+VacuumRayViewFactor::surfaceName(const unsigned int surface) const
+{
+  return _study.surfaceName(surface);
+}
+
+BoundaryID
+VacuumRayViewFactor::surfaceBoundaryID(const unsigned int surface) const
+{
+  return _study.surfaceBoundaryID(surface);
 }
 
 #endif // MOOSE_XDG_ENABLED

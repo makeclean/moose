@@ -54,6 +54,10 @@ their escape fraction is exactly one.
   [!param](/UserObjects/VacuumRayViewFactorStudy/boundary) parameter; an error is
   raised otherwise, because radiation reaching an unlisted surface would otherwise
   be silently lost.
+- Each participating sideset is one XDG surface that is split into the number of
+  patches given by [!param](/UserObjects/VacuumRayViewFactorStudy/n_patches). The
+  patches are indexed internally (they are not added to the mesh as sidesets), so
+  the number of patches is not limited by the available boundary ids.
 
 ## Example Input Syntax
 
