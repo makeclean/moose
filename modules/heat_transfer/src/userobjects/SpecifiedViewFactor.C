@@ -24,25 +24,29 @@ SpecifiedViewFactor::validParams()
 SpecifiedViewFactor::SpecifiedViewFactor(const InputParameters & parameters)
   : ViewFactorBase(parameters)
 {
-  _view_factors = getParam<std::vector<std::vector<Real>>>("view_factors");
+  const auto & vf = getParam<std::vector<std::vector<Real>>>("view_factors");
+  checkViewFactors(vf);
 
-  checkViewFactors();
+  for (const auto i : index_range(vf))
+    for (const auto j : index_range(vf[i]))
+      if (vf[i][j] != 0.0)
+        _view_factors.add(i, j, vf[i][j]);
 }
 
 void
-SpecifiedViewFactor::checkViewFactors() const
+SpecifiedViewFactor::checkViewFactors(const std::vector<std::vector<Real>> & view_factors) const
 {
   // check that the input has the right format
-  if (_view_factors.size() != _n_sides)
+  if (view_factors.size() != _n_sides)
     paramError("view_factors",
                "Leading dimension of view_factors must be equal to number of side sets.");
 
-  for (unsigned int i = 0; i < _n_sides; ++i)
-    if (_view_factors[i].size() != _n_sides)
+  for (const auto i : index_range(view_factors))
+    if (view_factors[i].size() != _n_sides)
       paramError("view_factors",
                  "view_factors must be provided as square array. Row ",
                  i,
                  " has ",
-                 _view_factors[i].size(),
+                 view_factors[i].size(),
                  " entries.");
 }

@@ -1,0 +1,30 @@
+[Tests]
+  design = 'ViewFactorMatrix.md'
+  issues = '#99999999'
+
+  [get_returns_zero_for_missing_entry]
+    type = GoogleTest
+    unit_test = ViewFactorMatrix.getReturnsZeroForMissingEntry
+    requirement = 'The system shall return zero from ViewFactorMatrix::get for (row, column) pairs that are not stored, such that sparse storage is observationally equivalent to dense storage for absent entries.'
+  []
+  [add_accumulates_and_keeps_rows_sorted]
+    type = GoogleTest
+    unit_test = ViewFactorMatrix.addAccumulatesAndKeepsRowsSorted
+    requirement = 'The system shall add the given delta to the existing entry when the (row, column) pair is already stored, insert it at the sorted position when it is absent, and keep each row sorted by column.'
+  []
+  [merge_sums_overlapping_columns]
+    type = GoogleTest
+    unit_test = ViewFactorMatrix.mergeSumsOverlappingColumns
+    requirement = 'The system shall add all entries of another ViewFactorMatrix to this one in threadJoinViewFactor-style joins, summing entries with the same (row, column) pair and inserting new columns at their sorted position.'
+  []
+  [clear_removes_entries_but_keeps_rows]
+    type = GoogleTest
+    unit_test = ViewFactorMatrix.clearRemovesEntriesButKeepsRows
+    requirement = 'The system shall remove all stored entries from a ViewFactorMatrix while preserving the number of rows, so that the matrix can be reused for the next execution.'
+  []
+  [gather_sum_sums_over_processors]
+    type = GoogleTest
+    unit_test = ViewFactorMatrix.gatherSumSumsOverProcessors
+    requirement = 'The system shall sum the stored entries of a ViewFactorMatrix over all MPI processors in gatherSum, such that every processor ends with the identical global matrix and entries whose sum is zero are dropped.'
+  []
+[]

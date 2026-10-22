@@ -73,7 +73,7 @@ VacuumRayViewFactorStudy::VacuumRayViewFactorStudy(const InputParameters & param
         0,
         1)),
     _num_dir(_aq->numDirections()),
-    _vf_weights(_n_boundaries, std::vector<Real>(_n_boundaries, 0)),
+    _vf_weights(_n_boundaries),
     _escape_weights(_n_boundaries, 0)
 {
   for (const auto i : index_range(_boundary_ids))
@@ -175,8 +175,7 @@ VacuumRayViewFactorStudy::initialSetup()
 void
 VacuumRayViewFactorStudy::initialize()
 {
-  for (auto & row : _vf_weights)
-    std::fill(row.begin(), row.end(), 0);
+  _vf_weights.clear();
   std::fill(_escape_weights.begin(), _escape_weights.end(), 0);
 }
 
@@ -233,9 +232,9 @@ VacuumRayViewFactorStudy::execute()
           model->_void_volume, pos, dir, xdg::INFTY, xdg::HitOrientation::ANY, &exclude);
 
       if (hit_surface != xdg::ID_NONE)
-        _vf_weights[from]
-                   [boundaryIndex(libmesh_map_find(model->_surface_to_boundary, hit_surface))] +=
-            weight;
+        _vf_weights.add(from,
+                        boundaryIndex(libmesh_map_find(model->_surface_to_boundary, hit_surface)),
+                        weight);
       else
         _escape_weights[from] += weight;
     }
@@ -246,29 +245,30 @@ void
 VacuumRayViewFactorStudy::finalize()
 {
   // the ray weights are accumulated on the processors that own the elements
+  _vf_weights.gatherSum(comm());
   for (const auto i : make_range(_n_boundaries))
-  {
-    gatherSum(_vf_weights[i]);
     gatherSum(_escape_weights[i]);
-  }
 }
 
 void
 VacuumRayViewFactorStudy::threadJoin(const UserObject & y)
 {
   const auto & study = cast_ref<const VacuumRayViewFactorStudy &>(y);
+  _vf_weights.merge(study._vf_weights);
   for (const auto i : make_range(_n_boundaries))
-  {
     _escape_weights[i] += study._escape_weights[i];
-    for (const auto j : make_range(_n_boundaries))
-      _vf_weights[i][j] += study._vf_weights[i][j];
-  }
 }
 
 Real
 VacuumRayViewFactorStudy::viewFactorWeight(const BoundaryID from_id, const BoundaryID to_id) const
 {
-  return _vf_weights[boundaryIndex(from_id)][boundaryIndex(to_id)];
+  return _vf_weights.get(boundaryIndex(from_id), boundaryIndex(to_id));
+}
+
+const std::vector<ViewFactorMatrix::Entry> &
+VacuumRayViewFactorStudy::viewFactorRow(const BoundaryID from_id) const
+{
+  return _vf_weights.row(boundaryIndex(from_id));
 }
 
 Real

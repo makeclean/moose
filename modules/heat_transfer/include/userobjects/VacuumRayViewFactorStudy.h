@@ -10,6 +10,7 @@
 #pragma once
 
 #include "SideUserObject.h"
+#include "ViewFactorMatrix.h"
 
 #ifdef MOOSE_XDG_ENABLED
 #include "RayTracingAngularQuadrature.h"
@@ -55,6 +56,10 @@ public:
   /// The MPI-summed weight of rays leaving \p from_id that arrive at \p to_id
   Real viewFactorWeight(BoundaryID from_id, BoundaryID to_id) const;
 
+  /// The MPI-summed weights of rays leaving \p from_id, as (boundary index, weight)
+  /// pairs sorted by index
+  const std::vector<ViewFactorMatrix::Entry> & viewFactorRow(BoundaryID from_id) const;
+
   /// The MPI-summed weight of rays leaving \p from_id that escape to the environment
   Real escapeWeight(BoundaryID from_id) const;
 
@@ -85,8 +90,8 @@ protected:
   /// number of angular directions
   std::size_t _num_dir;
 
-  /// the view factor weights accumulated on this thread: [from][to]
-  std::vector<std::vector<Real>> _vf_weights;
+  /// the view factor weights accumulated on this thread: [from] -> (to, weight)
+  ViewFactorMatrix _vf_weights;
 
   /// the escape weights accumulated on this thread: [from]
   std::vector<Real> _escape_weights;

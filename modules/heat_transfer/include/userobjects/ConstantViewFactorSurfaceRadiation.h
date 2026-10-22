@@ -10,6 +10,7 @@
 #pragma once
 
 #include "GrayLambertSurfaceRadiationBase.h"
+#include "ViewFactorMatrix.h"
 
 // Forward Declarations
 class Function;
@@ -28,5 +29,8 @@ public:
   virtual void initialize() override;
 
 protected:
-  virtual std::vector<std::vector<Real>> setViewFactors() override;
+  virtual const ViewFactorMatrix * setViewFactors() override;
+
+  /// the view factors from the input file, normalized in initialize()
+  ViewFactorMatrix _vf_matrix;
 };

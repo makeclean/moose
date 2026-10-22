@@ -25,5 +25,5 @@ protected:
   virtual void threadJoinViewFactor(const UserObject & /*y*/) override {};
   virtual void finalizeViewFactor() override {};
 
-  virtual void checkViewFactors() const;
+  virtual void checkViewFactors(const std::vector<std::vector<Real>> & view_factors) const;
 };

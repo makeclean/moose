@@ -9,6 +9,9 @@
 
 #include "ViewFactorObjectSurfaceRadiation.h"
 #include "ViewFactorBase.h"
+#include "MooseUtils.h"
+
+#include <map>
 
 registerMooseObject("HeatTransferApp", ViewFactorObjectSurfaceRadiation);
 
@@ -30,21 +33,31 @@ ViewFactorObjectSurfaceRadiation::ViewFactorObjectSurfaceRadiation(
 {
 }
 
-std::vector<std::vector<Real>>
+const ViewFactorMatrix *
 ViewFactorObjectSurfaceRadiation::setViewFactors()
 {
   const ViewFactorBase & view_factor_uo = getUserObject<ViewFactorBase>("view_factor_object_name");
-  std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
-  std::vector<std::vector<Real>> vf(_n_sides);
 
-  for (unsigned int i = 0; i < _n_sides; ++i)
-  {
-    vf[i].resize(_n_sides);
+  // this object and the view factor object may list their boundaries in different orders, so
+  // the view factor entries are permuted into this object's ordering
+  const auto & vf_names = view_factor_uo.boundaryNames();
+  const auto & my_names = boundaryNames();
 
-    for (unsigned int j = 0; j < _n_sides; ++j)
-      vf[i][j] = view_factor_uo.getViewFactor(boundary_names[i], boundary_names[j]);
-  }
-  return vf;
+  std::map<BoundaryName, unsigned int> vf_index;
+  for (const auto j : index_range(vf_names))
+    vf_index[vf_names[j]] = j;
+
+  std::map<BoundaryName, unsigned int> my_index;
+  for (const auto i : index_range(my_names))
+    my_index[my_names[i]] = i;
+
+  const auto & vf = view_factor_uo.viewFactorMatrix();
+  _vf_matrix = ViewFactorMatrix(_n_sides);
+  for (const auto i : index_range(my_names))
+    for (const auto & [j, value] : vf.row(libmesh_map_find(vf_index, my_names[i])))
+      _vf_matrix.add(i, libmesh_map_find(my_index, vf_names[j]), value);
+
+  return &_vf_matrix;
 }
 
 std::vector<Real>

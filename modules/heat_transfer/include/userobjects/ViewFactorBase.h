@@ -10,6 +10,7 @@
 #pragma once
 
 #include "SideUserObject.h"
+#include "ViewFactorMatrix.h"
 
 // Forward Declarations
 
@@ -33,6 +34,8 @@ public:
   ///@{ public interface for obtaining view factors
   Real getViewFactor(BoundaryID from_id, BoundaryID to_id) const;
   Real getViewFactor(BoundaryName from_name, BoundaryName to_name) const;
+  /// The full view factor matrix, sparse, indexed by the boundary parameter order
+  const ViewFactorMatrix & viewFactorMatrix() const;
   ///@}
 
   /// The fraction of radiation leaving this boundary that escapes to the environment.
@@ -97,8 +100,8 @@ protected:
   // whether to print view factor information
   const bool _print_view_factor_info;
 
-  /// the view factor from side i to side j
-  std::vector<std::vector<Real>> _view_factors;
+  /// the view factor from side i to side j, sparse
+  ViewFactorMatrix _view_factors;
 
   /// boundary name to index map
   std::unordered_map<std::string, unsigned int> _side_name_index;

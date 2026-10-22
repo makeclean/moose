@@ -27,24 +27,20 @@ ConstantViewFactorSurfaceRadiation::validParams()
 
 ConstantViewFactorSurfaceRadiation::ConstantViewFactorSurfaceRadiation(
     const InputParameters & parameters)
-  : GrayLambertSurfaceRadiationBase(parameters)
+  : GrayLambertSurfaceRadiationBase(parameters), _vf_matrix(_n_sides)
 {
   mooseDeprecated("ConstantViewFactorSurfaceRadiation is deprecated. Please use "
                   "ViewFactorObjectSurfaceRadiation in conjunction with SpecifiedViewFactor to "
                   "achieve the same effect as this object.");
-}
 
-std::vector<std::vector<Real>>
-ConstantViewFactorSurfaceRadiation::setViewFactors()
-{
-  std::vector<std::vector<Real>> vf = getParam<std::vector<std::vector<Real>>>("view_factors");
+  const auto & vf = getParam<std::vector<std::vector<Real>>>("view_factors");
 
   // check that the input has the right format
   if (vf.size() != _n_sides)
     paramError("view_factors",
                "Leading dimension of view_factors must be equal to number of side sets.");
 
-  for (unsigned int i = 0; i < _n_sides; ++i)
+  for (const auto i : index_range(vf))
     if (vf[i].size() != _n_sides)
       paramError("view_factors",
                  "view_factors must be provided as square array. Row ",
@@ -52,7 +48,17 @@ ConstantViewFactorSurfaceRadiation::setViewFactors()
                  " has ",
                  vf[i].size(),
                  " entries.");
-  return vf;
+
+  for (const auto i : index_range(vf))
+    for (const auto j : index_range(vf[i]))
+      if (vf[i][j] != 0.0)
+        _vf_matrix.add(i, j, vf[i][j]);
+}
+
+const ViewFactorMatrix *
+ConstantViewFactorSurfaceRadiation::setViewFactors()
+{
+  return &_vf_matrix;
 }
 
 void
@@ -61,10 +67,10 @@ ConstantViewFactorSurfaceRadiation::initialize()
   GrayLambertSurfaceRadiationBase::initialize();
 
   // check row-sum and normalize if necessary
-  for (unsigned int i = 0; i < _n_sides; ++i)
+  for (const auto i : make_range(_n_sides))
   {
     Real sum = 0;
-    for (auto & v : _view_factors[i])
+    for (const auto & [j, v] : _vf_matrix.row(i))
       sum += v;
 
     // an error of 5% is acceptable, but more indicates an error in the
@@ -73,7 +79,8 @@ ConstantViewFactorSurfaceRadiation::initialize()
       mooseError("view_factors row ", i, " sums to ", sum);
 
     // correct view factors
-    for (auto & v : _view_factors[i])
-      v /= sum;
+    const Real factor = 1. / sum;
+    for (auto & [j, v] : _vf_matrix.row(i))
+      v *= factor;
   }
 }

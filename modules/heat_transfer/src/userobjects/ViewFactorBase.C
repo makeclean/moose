@@ -11,6 +11,7 @@
 #include "libmesh/quadrature.h"
 
 #include <limits>
+#include <set>
 
 InputParameters
 ViewFactorBase::validParams()
@@ -47,13 +48,9 @@ ViewFactorBase::ViewFactorBase(const InputParameters & parameters)
     _normalize_view_factor(getParam<bool>("normalize_view_factor")),
     _normalization_method(
         getParam<MooseEnum>("normalization_method").getEnum<NormalizationMethod>()),
-    _print_view_factor_info(getParam<bool>("print_view_factor_info"))
+    _print_view_factor_info(getParam<bool>("print_view_factor_info")),
+    _view_factors(_n_sides)
 {
-  // sizing the view factor array
-  _view_factors.resize(_n_sides);
-  for (auto & v : _view_factors)
-    v.resize(_n_sides);
-
   // set up the map from the side id to the local index & side name to local index
   std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
   for (unsigned int j = 0; j < boundary_names.size(); ++j)
@@ -97,7 +94,13 @@ ViewFactorBase::getViewFactor(BoundaryName from_name, BoundaryName to_name) cons
                to_name,
                " not listed in boundary parameter.");
 
-  return _view_factors[from->second][to->second];
+  return _view_factors.get(from->second, to->second);
+}
+
+const ViewFactorMatrix &
+ViewFactorBase::viewFactorMatrix() const
+{
+  return _view_factors;
 }
 
 void
@@ -144,20 +147,27 @@ ViewFactorBase::threadJoin(const UserObject & y)
 Real
 ViewFactorBase::devReciprocity(unsigned int i, unsigned int j) const
 {
-  return _view_factors[i][j] - _areas[j] / _areas[i] * _view_factors[j][i];
+  return _view_factors.get(i, j) - _areas[j] / _areas[i] * _view_factors.get(j, i);
 }
 
 Real
 ViewFactorBase::maxDevReciprocity() const
 {
+  // only pairs of which at least one entry is stored can have a nonzero
+  // deviation from reciprocity
+  std::set<std::pair<unsigned int, unsigned int>> pairs;
+  for (const auto i : make_range(_n_sides))
+    for (const auto & [j, value] : _view_factors.row(i))
+      if (j != i)
+        pairs.insert({std::min(i, j), std::max(i, j)});
+
   Real v = 0;
-  for (unsigned int i = 0; i < _n_sides; ++i)
-    for (unsigned int j = i + 1; j < _n_sides; ++j)
-    {
-      Real s = std::abs(devReciprocity(i, j));
-      if (s > v)
-        v = s;
-    }
+  for (const auto & [i, j] : pairs)
+  {
+    Real s = std::abs(devReciprocity(i, j));
+    if (s > v)
+      v = s;
+  }
   return v;
 }
 
@@ -165,8 +175,8 @@ Real
 ViewFactorBase::viewFactorRowSum(unsigned int i) const
 {
   Real s = 0;
-  for (unsigned int to = 0; to < _n_sides; ++to)
-    s += _view_factors[i][to];
+  for (const auto & [to, value] : _view_factors.row(i))
+    s += value;
   return s;
 }
 
@@ -241,7 +251,7 @@ ViewFactorBase::checkAndNormalizeViewFactor()
     for (const auto i : make_range(_n_sides))
       for (const auto j : make_range(_n_sides))
       {
-        const Real correction = _view_factors[i][j] - view_factors_original[i][j];
+        const Real correction = _view_factors.get(i, j) - view_factors_original.get(i, j);
         min_correction = std::min(correction, min_correction);
         max_correction = std::max(correction, max_correction);
       }
@@ -249,24 +259,22 @@ ViewFactorBase::checkAndNormalizeViewFactor()
 
   if (_print_view_factor_info)
   {
-    _console << "\nFinal view factors.\n" << std::endl;
-    for (unsigned int from = 0; from < _n_sides; ++from)
-    {
-      std::string from_name;
-      for (auto pair : _side_name_index)
-        if (pair.second == from)
-          from_name = pair.first;
-      auto from_id = _mesh.getBoundaryID(from_name);
+    // index -> name, so that printing a stored entry does not require a
+    // linear scan of _side_name_index
+    std::vector<std::string> names(_n_sides);
+    for (const auto & pair : _side_name_index)
+      names[pair.second] = pair.first;
 
-      for (unsigned int to = 0; to < _n_sides; ++to)
+    _console << "\nFinal view factors.\n" << std::endl;
+    for (const auto from : make_range(_n_sides))
+    {
+      const auto from_id = _mesh.getBoundaryID(names[from]);
+      // only the stored (nonzero) entries are printed
+      for (const auto & [to, value] : _view_factors.row(from))
       {
-        std::string to_name;
-        for (auto pair : _side_name_index)
-          if (pair.second == to)
-            to_name = pair.first;
-        auto to_id = _mesh.getBoundaryID(to_name);
-        _console << from_name << " (" << from_id << ") -> " << to_name << " (" << to_id
-                 << ") = " << _view_factors[from][to] << std::endl;
+        const auto to_id = _mesh.getBoundaryID(names[to]);
+        _console << names[from] << " (" << from_id << ") -> " << names[to] << " (" << to_id
+                 << ") = " << value << std::endl;
       }
     }
   }
@@ -345,7 +353,11 @@ ViewFactorBase::normalizeUsingLagrangeMultiplier()
 
   // perform corrections but store view factors to temporary array
   // because we cannot modify _view_factors as it's used in this calc
-  std::vector<std::vector<Real>> vf_temp = _view_factors;
+  // the temporary is dense because the correction touches every entry
+  std::vector<std::vector<Real>> vf_temp(_n_sides, std::vector<Real>(_n_sides, 0));
+  for (const auto i : make_range(_n_sides))
+    for (const auto & [j, value] : _view_factors.row(i))
+      vf_temp[i][j] = value;
   for (unsigned int i = 0; i < _n_sides; ++i)
     for (unsigned int j = 0; j < _n_sides; ++j)
     {
@@ -362,7 +374,12 @@ ViewFactorBase::normalizeUsingLagrangeMultiplier()
       // update the temporary view factor
       vf_temp[i][j] += correction;
     }
-  _view_factors = vf_temp;
+
+  _view_factors.clear();
+  for (const auto i : make_range(_n_sides))
+    for (const auto j : make_range(_n_sides))
+      if (vf_temp[i][j] != 0)
+        _view_factors.add(i, j, vf_temp[i][j]);
 }
 
 void
@@ -371,8 +388,8 @@ ViewFactorBase::normalizeUsingInverseRowSum()
   for (unsigned int i = 0; i < _n_sides; ++i)
   {
     const Real row_sum = viewFactorRowSum(i);
-    for (auto & v : _view_factors[i])
-      v /= row_sum;
+    for (auto & entry : _view_factors.row(i))
+      entry.second /= row_sum;
   }
 }
 

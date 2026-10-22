@@ -77,8 +77,8 @@ UnobstructedPlanarViewFactor::execute()
         std::get<2>(side) != _current_boundary_id)
     {
       // this is the remote side index
-      unsigned int remote_index = _side_name_index.find(remote_boundary_name)->second;
-      Real & vf = _view_factors[index][remote_index];
+      const unsigned int remote_index = _side_name_index.find(remote_boundary_name)->second;
+      Real vf = 0;
 
       // compute some important quantities on the face
       reinitFace(std::get<0>(side), std::get<1>(side));
@@ -98,6 +98,8 @@ UnobstructedPlanarViewFactor::execute()
                 std::abs(cos1) * std::abs(cos2) / MathUtils::pow(distance, _exponent);
         }
       }
+      if (vf != 0.0)
+        _view_factors.add(index, remote_index, vf);
     }
   }
 }
@@ -114,33 +116,26 @@ UnobstructedPlanarViewFactor::initialize()
   _side_list = _boundary_info->build_active_side_list();
 
   // set view_factors to zero
-  for (unsigned int j = 0; j < _n_sides; ++j)
-  {
-    for (auto & vf : _view_factors[j])
-      vf = 0;
-  }
+  _view_factors.clear();
 }
 
 void
 UnobstructedPlanarViewFactor::threadJoinViewFactor(const UserObject & y)
 {
   const auto & vf = cast_ref<const UnobstructedPlanarViewFactor &>(y);
-  for (unsigned int i = 0; i < _n_sides; ++i)
-    for (unsigned int j = 0; j < _n_sides; ++j)
-      _view_factors[i][j] += vf._view_factors[i][j];
+  _view_factors.merge(vf._view_factors);
 }
 
 void
 UnobstructedPlanarViewFactor::finalizeViewFactor()
 {
-  for (unsigned int i = 0; i < _n_sides; ++i)
-  {
-    gatherSum(_view_factors[i]);
+  // the view factors are accumulated on the processors that own the elements
+  _view_factors.gatherSum(comm());
 
-    // divide view_factor Fij by Ai and pi
-    for (auto & vf : _view_factors[i])
-      vf /= (_areas[i] * _divisor);
-  }
+  // divide view_factor Fij by Ai and pi
+  for (const auto i : make_range(_n_sides))
+    for (auto & [to, value] : _view_factors.row(i))
+      value /= (_areas[i] * _divisor);
 }
 
 void

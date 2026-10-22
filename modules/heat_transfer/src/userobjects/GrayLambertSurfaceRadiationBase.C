@@ -8,10 +8,13 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "GrayLambertSurfaceRadiationBase.h"
+#include "ViewFactorMatrix.h"
 #include "MathUtils.h"
 #include "Function.h"
 #include "libmesh/quadrature.h"
+#include "libmesh/petsc_solver_exception.h"
 
+#include <petscksp.h>
 #include <cmath>
 
 InputParameters
@@ -69,7 +72,13 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
     _environment_temperature(isParamSetByUser("environment_temperature")
                                  ? &getFunctionByName(
                                         getParam<FunctionName>("environment_temperature"))
-                                 : nullptr)
+                                 : nullptr),
+    _view_factors(nullptr),
+    _mat(nullptr),
+    _ksp(nullptr),
+    _pc(nullptr),
+    _rhs(nullptr),
+    _radiosity_vec(nullptr)
 {
   // get emissivity functions
   auto & eps_names = getParam<std::vector<FunctionName>>("emissivity");
@@ -168,6 +177,18 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
                "'black_body'.");
 }
 
+GrayLambertSurfaceRadiationBase::~GrayLambertSurfaceRadiationBase()
+{
+  if (_ksp)
+    LibmeshPetscCall(KSPDestroy(&_ksp));
+  if (_mat)
+    LibmeshPetscCall(MatDestroy(&_mat));
+  if (_rhs)
+    LibmeshPetscCall(VecDestroy(&_rhs));
+  if (_radiosity_vec)
+    LibmeshPetscCall(VecDestroy(&_radiosity_vec));
+}
+
 void
 GrayLambertSurfaceRadiationBase::execute()
 {
@@ -204,6 +225,52 @@ GrayLambertSurfaceRadiationBase::initialize()
   _view_factors = setViewFactors();
   _escape_fractions = setEscapeFractions();
 
+  // create the sparse matrix and the GMRES/ILU(0) solver once, the first time we
+  // see the view factors. The pattern is the nonzero structure of the view factor
+  // matrix plus the diagonal; the entries are restamped in finalize() at every
+  // nonlinear iteration.
+  if (!_mat)
+  {
+    LibmeshPetscCall(MatCreate(PETSC_COMM_SELF, &_mat));
+    LibmeshPetscCall(MatSetSizes(_mat, _n_sides, _n_sides, _n_sides, _n_sides));
+    LibmeshPetscCall(MatSetUp(_mat));
+
+    for (const auto i : make_range(_n_sides))
+    {
+      // a zero value still registers the (i, j) location in the pattern
+      std::vector<PetscInt> cols;
+      std::vector<PetscReal> vals;
+      cols.push_back(i);
+      vals.push_back(0);
+      // the diagonal is registered above, and the pattern must not list a column twice
+      for (const auto & [j, value] : _view_factors->row(i))
+        if (j != i)
+        {
+          cols.push_back(j);
+          vals.push_back(0);
+        }
+      const PetscInt row = i;
+      LibmeshPetscCall(MatSetValues(
+          _mat, 1, &row, (PetscInt)cols.size(), cols.data(), vals.data(), INSERT_VALUES));
+    }
+    LibmeshPetscCall(MatAssemblyBegin(_mat, MAT_FLUSH_ASSEMBLY));
+    LibmeshPetscCall(MatAssemblyEnd(_mat, MAT_FINAL_ASSEMBLY));
+
+    LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &_ksp));
+    LibmeshPetscCall(KSPSetType(_ksp, KSPGMRES));
+    LibmeshPetscCall(KSPSetOperators(_ksp, _mat, _mat));
+    // the PC is owned by the KSP, so it must not be destroyed separately
+    LibmeshPetscCall(KSPGetPC(_ksp, &_pc));
+    LibmeshPetscCall(PCSetType(_pc, PCILU));
+    // 1e-13 is tight enough that the iterative solution matches the previous direct
+    // solve within the last digit of the regression test outputs; the rtol test is a
+    // relative residual test by default
+    LibmeshPetscCall(KSPSetTolerances(_ksp, 1e-13, PETSC_DEFAULT, PETSC_DEFAULT, PETSC_DEFAULT));
+
+    LibmeshPetscCall(VecCreateSeq(PETSC_COMM_SELF, _n_sides, &_rhs));
+    LibmeshPetscCall(VecCreateSeq(PETSC_COMM_SELF, _n_sides, &_radiosity_vec));
+  }
+
   // initialize areas, beta, side temps
   for (unsigned int j = 0; j < _n_sides; ++j)
   {
@@ -235,60 +302,93 @@ GrayLambertSurfaceRadiationBase::finalize()
                 MathUtils::pow(_environment_temperature->value(_t, Point()), 4)
           : 0;
 
-  // matrix and rhs vector for the view factor calculation
-  DenseMatrix<Real> matrix(_n_sides, _n_sides);
-  DenseVector<Real> rhs(_n_sides);
-  DenseVector<Real> radiosity(_n_sides);
-  for (unsigned int i = 0; i < _n_sides; ++i)
+  // stamp the entries of A = I - F o diag(c) at the current emissivities; c is the
+  // reflectivity 1 - emissivity, or 1 for adiabatic surfaces. The pattern was
+  // created in initialize().
+  LibmeshPetscCall(MatZeroEntries(_mat));
+  for (const auto i : make_range(_n_sides))
   {
-    rhs(i) = _beta[i];
+    const Real c =
+        _side_type[i] == ADIABATIC ? 1 : 1 - _emissivity[i]->value(_side_temperature[i], Point());
+    std::vector<PetscInt> cols;
+    std::vector<PetscReal> vals;
+    // the diagonal is 1 even if the view factor matrix has no diagonal entry
+    cols.push_back(i);
+    vals.push_back(1 - c * _view_factors->get(i, i));
+    for (const auto & [j, value] : _view_factors->row(i))
+      if (j != i)
+      {
+        cols.push_back(j);
+        vals.push_back(-c * value);
+      }
+    const PetscInt row = i;
+    LibmeshPetscCall(MatSetValues(
+        _mat, 1, &row, (PetscInt)cols.size(), cols.data(), vals.data(), INSERT_VALUES));
+  }
+  LibmeshPetscCall(MatAssemblyBegin(_mat, MAT_FLUSH_ASSEMBLY));
+  LibmeshPetscCall(MatAssemblyEnd(_mat, MAT_FINAL_ASSEMBLY));
+
+  // right-hand side of the radiosity system
+  LibmeshPetscCall(VecZeroEntries(_rhs));
+  for (const auto i : make_range(_n_sides))
+  {
+    Real rhs_i = _beta[i];
     // radiation that escapes to the environment is re-emitted according to its
     // reflectivity (or fully absorbed and balanced for adiabatic surfaces)
     if (_side_type[i] == ADIABATIC)
-      rhs(i) += _escape_fractions[i] * environment_black_body;
+      rhs_i += _escape_fractions[i] * environment_black_body;
     else
-      rhs(i) += (1 - _emissivity[i]->value(_side_temperature[i], Point())) * _escape_fractions[i] *
-                environment_black_body;
-    matrix(i, i) = 1;
-    for (unsigned int j = 0; j < _n_sides; ++j)
-    {
-      if (_side_type[i] == ADIABATIC)
-        matrix(i, j) -= _view_factors[i][j];
-      else
-        matrix(i, j) -=
-            (1 - _emissivity[i]->value(_side_temperature[i], Point())) * _view_factors[i][j];
-    }
+      rhs_i += (1 - _emissivity[i]->value(_side_temperature[i], Point())) * _escape_fractions[i] *
+               environment_black_body;
+    LibmeshPetscCall(VecSetValue(_rhs, i, rhs_i, ADD_VALUES));
   }
+  LibmeshPetscCall(VecAssemblyBegin(_rhs));
+  LibmeshPetscCall(VecAssemblyEnd(_rhs));
+
+  // the ILU(0) factors are stale because the entries changed; PETSc does not
+  // detect this, so re-setup the preconditioner explicitly
+  LibmeshPetscCall(PCSetUp(_pc));
 
   // compute the radiosityes
-  matrix.lu_solve(rhs, radiosity);
+  LibmeshPetscCall(KSPSolve(_ksp, _rhs, _radiosity_vec));
+  KSPConvergedReason converged_reason = KSP_CONVERGED_ITERATING;
+  LibmeshPetscCallQ(KSPGetConvergedReason(_ksp, &converged_reason));
+  if (converged_reason < 0)
+    mooseError("The radiosity solve did not converge (PETSc KSP reason: ",
+               static_cast<int>(converged_reason),
+               ").");
+
+  const PetscScalar * radiosity = nullptr;
+  LibmeshPetscCallQ(VecGetArrayRead(_radiosity_vec, &radiosity));
 
   // store the radiosity, temperatures and heat flux density for each surface
-  for (unsigned int i = 0; i < _n_sides; ++i)
+  for (const auto i : make_range(_n_sides))
   {
-    _radiosity[i] = radiosity(i);
+    _radiosity[i] = radiosity[i];
 
     // _heat_flux_density is obtained from a somewhat cumbersome relation
     // but it has the advantage that we do not divide by 1 - emissivity
     // which blows up for black bodies
-    _heat_flux_density[i] = radiosity(i);
-    for (unsigned int j = 0; j < _n_sides; ++j)
-      _heat_flux_density[i] -= _view_factors[i][j] * radiosity(j);
+    _heat_flux_density[i] = radiosity[i];
+    for (const auto & [j, value] : _view_factors->row(i))
+      _heat_flux_density[i] -= value * radiosity[j];
     _heat_flux_density[i] -= _escape_fractions[i] * environment_black_body;
 
     if (_side_type[i] == ADIABATIC)
     {
       Real e = _emissivity[i]->value(_side_temperature[i], Point());
       _side_temperature[i] = std::pow(
-          (radiosity(i) + (1 - e) / e * _heat_flux_density[i]) / _sigma_stefan_boltzmann, 0.25);
+          (radiosity[i] + (1 - e) / e * _heat_flux_density[i]) / _sigma_stefan_boltzmann, 0.25);
     }
 
     // compute the surface irradiation into i from the radiosities
     _surface_irradiation[i] = 0;
-    for (unsigned int j = 0; j < _n_sides; ++j)
-      _surface_irradiation[i] += _view_factors[i][j] * radiosity(j);
+    for (const auto & [j, value] : _view_factors->row(i))
+      _surface_irradiation[i] += value * radiosity[j];
     _surface_irradiation[i] += _escape_fractions[i] * environment_black_body;
   }
+
+  LibmeshPetscCallQ(VecRestoreArrayRead(_radiosity_vec, &radiosity));
 }
 
 std::vector<Real>
@@ -363,5 +463,5 @@ GrayLambertSurfaceRadiationBase::getSurfaceEmissivity(BoundaryID id) const
 Real
 GrayLambertSurfaceRadiationBase::getViewFactor(BoundaryID from_id, BoundaryID to_id) const
 {
-  return _view_factors[getSideIDIndex(from_id)][getSideIDIndex(to_id)];
+  return _view_factors->get(getSideIDIndex(from_id), getSideIDIndex(to_id));
 }

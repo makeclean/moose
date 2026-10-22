@@ -10,6 +10,7 @@
 #pragma once
 
 #include "GrayLambertSurfaceRadiationBase.h"
+#include "ViewFactorMatrix.h"
 
 // Forward Declarations
 class ViewFactorBase;
@@ -26,7 +27,10 @@ public:
   ViewFactorObjectSurfaceRadiation(const InputParameters & parameters);
 
 protected:
-  virtual std::vector<std::vector<Real>> setViewFactors() override;
+  virtual const ViewFactorMatrix * setViewFactors() override;
 
   virtual std::vector<Real> setEscapeFractions() override;
+
+  /// view factors of the view factor object permuted into this object's boundary ordering
+  ViewFactorMatrix _vf_matrix;
 };

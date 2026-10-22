@@ -12,8 +12,12 @@
 #include "SideUserObject.h"
 #include "MooseEnum.h"
 
+#include <petscmat.h>
+#include <petscksp.h>
+
 // Forward Declarations
 class Function;
+class ViewFactorMatrix;
 
 /**
  * GrayLambertSurfaceRadiationBase computes the heat flux on a set of surfaces
@@ -25,6 +29,7 @@ public:
   static InputParameters validParams();
 
   GrayLambertSurfaceRadiationBase(const InputParameters & parameters);
+  virtual ~GrayLambertSurfaceRadiationBase();
 
   virtual void execute() override;
   virtual void initialize() override;
@@ -53,7 +58,7 @@ protected:
   virtual void threadJoin(const UserObject & y) override;
 
   /// a purely virtual function that defines where view factors come from
-  virtual std::vector<std::vector<Real>> setViewFactors() = 0;
+  virtual const ViewFactorMatrix * setViewFactors() = 0;
 
   /// returns the fraction of radiation that escapes each surface to the environment
   virtual std::vector<Real> setEscapeFractions();
@@ -116,5 +121,20 @@ protected:
   std::set<unsigned int> _adiabatic_side_ids;
 
   /// the view factors which are set by setViewFactors by derived classes
-  std::vector<std::vector<Real>> _view_factors;
+  const ViewFactorMatrix * _view_factors;
+
+  /// matrix A = I - F o diag(c) of the radiosity system, created in initialize()
+  Mat _mat;
+
+  /// GMRES solver for the radiosity system
+  KSP _ksp;
+
+  /// ILU(0) preconditioner of the radiosity KSP; owned by the KSP
+  PC _pc;
+
+  /// right-hand side of the radiosity system
+  Vec _rhs;
+
+  /// solution of the radiosity system
+  Vec _radiosity_vec;
 };
