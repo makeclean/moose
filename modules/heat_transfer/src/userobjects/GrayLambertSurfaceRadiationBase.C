@@ -152,6 +152,46 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
   }
   _n_sides = offset;
 
+  // a face may belong to one of the participating boundaries only; otherwise its area and
+  // view factors would be credited to one of them arbitrarily
+  std::map<std::pair<libMesh::dof_id_type, unsigned int>, unsigned int> face_boundary;
+  std::vector<unsigned int> boundary_sides(_boundary_ids.size(), 0);
+  for (const auto & [elem_id, side, boundary_id] :
+       _mesh.getMesh().get_boundary_info().build_active_side_list())
+  {
+    const auto boundary_it = _boundary_index.find(boundary_id);
+    if (boundary_it == _boundary_index.end())
+      continue;
+
+    ++boundary_sides[boundary_it->second];
+    const auto [face_it, inserted] = face_boundary.insert({{elem_id, side}, boundary_it->second});
+    if (!inserted && face_it->second != boundary_it->second)
+      paramError("boundary",
+                 "The face of element ",
+                 elem_id,
+                 " on side ",
+                 side,
+                 " belongs to boundary id ",
+                 _boundary_ids[face_it->second],
+                 " (",
+                 _mesh.getBoundaryName(_boundary_ids[face_it->second]),
+                 ") and boundary id ",
+                 boundary_id,
+                 " (",
+                 _mesh.getBoundaryName(boundary_id),
+                 "). Radiation boundaries must not share any faces.");
+  }
+
+  // a boundary without faces has no area and no view factors
+  for (const auto j : index_range(boundary_sides))
+    if (boundary_sides[j] == 0)
+      paramError("boundary",
+                 "Boundary id ",
+                 _boundary_ids[j],
+                 " (",
+                 _mesh.getBoundaryName(_boundary_ids[j]),
+                 ") has no faces. A radiation boundary must be a side set with at least one face.");
+
   // size the per-surface data
   _fixed_side_temperature.assign(_n_sides, nullptr);
   _radiosity.resize(_n_sides);

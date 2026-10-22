@@ -107,6 +107,11 @@ SideSetPatch::buildBoundaryMesh(const libMesh::MeshBase & mesh)
     }
 
   _boundary_mesh->prepare_for_use();
+
+  if (_boundary_mesh->n_elem() == 0)
+    mooseError("Boundary id ",
+               _sideset,
+               " has no faces. The patch subdivision requires a side set with at least one face.");
 }
 
 void

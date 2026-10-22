@@ -84,4 +84,22 @@
     max_threads=1
     mesh_mode = REPLICATED
   []
+
+  [overlapping_boundaries]
+    type = RunException
+    input = 'overlapping_boundaries.i'
+    expect_err = 'Radiation boundaries must not share any faces.'
+    mesh_mode = REPLICATED # PatchSidesetGenerator is not allowed to use distributed mesh
+    requirement = 'The system shall report an error if two of the boundaries participating in the radiative exchange share any faces.'
+    issues = '#99999999'
+  []
+
+  [nodeset_boundary]
+    type = RunException
+    input = 'nodeset_boundary.i'
+    expect_err = 'The following boundary id exists as a node set but is being requested as a side set'
+    mesh_mode = REPLICATED # RadiationTransferAction does not allow distributed mesh
+    requirement = 'The system shall report an error if one of the boundaries participating in the radiative exchange is a node set rather than a side set.'
+    issues = '#99999999'
+  []
 []

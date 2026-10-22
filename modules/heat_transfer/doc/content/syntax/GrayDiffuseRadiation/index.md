@@ -28,6 +28,8 @@ In summary:
 - Symmetry boundaries are the only type not participating in radiative exchange and thus do not appear in [!param](/GrayDiffuseRadiation/boundary).
 - Any boundary in [!param](/GrayDiffuseRadiation/boundary) that is not in [!param](/GrayDiffuseRadiation/adiabatic_boundary) nor [!param](/GrayDiffuseRadiation/fixed_temperature_boundary) is a variable-temperature boundary.
 
+The boundaries in [!param](/GrayDiffuseRadiation/boundary) must be side sets. A face of the mesh may belong to at most one of them; sidesets that overlap would assign the area and the view factors of a shared face to one of the boundaries arbitrarily, so the radiation objects report an error when they find one.
+
 ## Boundary Patches
 
 The surfaces in radiation exchange correspond to sidesets. Radiation quantities are averaged over each of these surfaces. The accuracy of the method can be improved by creating new sub-surfaces (called "patches") using the
