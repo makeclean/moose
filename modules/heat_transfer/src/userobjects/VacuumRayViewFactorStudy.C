@@ -26,6 +26,21 @@
 #include <set>
 #include <sstream>
 
+namespace
+{
+/// The sorted global node ids of a side, used as the key of the XDG face map
+std::vector<dof_id_type>
+sideNodeIds(const libMesh::Elem & elem, const unsigned int side)
+{
+  // Elem::nodes_on_side returns local node numbers, not global node ids
+  std::vector<dof_id_type> node_ids;
+  for (const auto local : elem.nodes_on_side(side))
+    node_ids.push_back(elem.node_id(local));
+  std::sort(node_ids.begin(), node_ids.end());
+  return node_ids;
+}
+}
+
 registerMooseObject("HeatTransferApp", VacuumRayViewFactorStudy);
 
 InputParameters
@@ -61,12 +76,13 @@ VacuumRayViewFactorStudy::validParams()
       "patch is created for every face of the boundary.");
 
   MultiMooseEnum partitioning(
-      "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc", "default");
+      "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc");
   partitioning.addValidName("grid");
   params.addParam<MultiMooseEnum>(
       "partitioners",
       partitioning,
-      "The partitioner to use for splitting each boundary into patches.");
+      "The partitioner to use for splitting each boundary into patches. Empty (the default) "
+      "uses the default partitioner. Only used when 'n_patches' is provided.");
 
   MultiMooseEnum direction("x y z radial");
   params.addParam<MultiMooseEnum>("centroid_partitioner_directions",
@@ -230,9 +246,7 @@ VacuumRayViewFactorStudy::initialSetup()
       continue;
 
     const libMesh::Elem * elem = _mesh.getMesh().elem_ptr(elem_id);
-    const auto nodes_on_side = elem->nodes_on_side(side);
-    std::vector<dof_id_type> node_ids(nodes_on_side.begin(), nodes_on_side.end());
-    std::sort(node_ids.begin(), node_ids.end());
+    const auto node_ids = sideNodeIds(*elem, side);
 
     const auto face_it = _face_id_by_node_ids.find(node_ids);
     if (face_it == _face_id_by_node_ids.end())
@@ -274,9 +288,7 @@ VacuumRayViewFactorStudy::execute()
 
   // look up the XDG face id of the emitting face so that the source face can be
   // excluded from the ray trace
-  const auto node_ids_unsigned = _current_elem->nodes_on_side(_current_side);
-  std::vector<dof_id_type> node_ids(node_ids_unsigned.begin(), node_ids_unsigned.end());
-  std::sort(node_ids.begin(), node_ids.end());
+  const auto node_ids = sideNodeIds(*_current_elem, _current_side);
   const auto face_it = model->_face_id_by_node_ids.find(node_ids);
   mooseAssert(face_it != model->_face_id_by_node_ids.end(),
               "The emitting face is not part of the XDG model.");

@@ -48,12 +48,13 @@ GrayLambertSurfaceRadiationBase::validParams()
       "replace the patches materialized as sidesets and are indexed internally.");
 
   MultiMooseEnum partitioning(
-      "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc", "default");
+      "default=-3 metis=-2 parmetis=-1 linear=0 centroid hilbert_sfc morton_sfc");
   partitioning.addValidName("grid");
   params.addParam<MultiMooseEnum>(
       "partitioners",
       partitioning,
-      "The partitioner to use for splitting each boundary into patches.");
+      "The partitioner to use for splitting each boundary into patches. Empty (the default) "
+      "uses the default partitioner. Only used when 'n_patches' is provided.");
 
   MultiMooseEnum direction("x y z radial");
   params.addParam<MultiMooseEnum>("centroid_partitioner_directions",

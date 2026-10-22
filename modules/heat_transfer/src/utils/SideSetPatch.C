@@ -131,7 +131,8 @@ SideSetPatch::partition()
     else if (_partitioner == "centroid")
     {
       if (_centroid_partitioner_direction.empty())
-        mooseError("The centroid partitioner requires a centroid partitioner direction.");
+        mooseError("If using the centroid partitioner you _must_ specify "
+                   "centroid_partitioner_direction!");
 
       if (_centroid_partitioner_direction == "x")
         _boundary_mesh->partitioner().reset(

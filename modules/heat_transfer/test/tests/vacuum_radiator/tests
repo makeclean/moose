@@ -57,6 +57,15 @@
     mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
   []
 
+  [two_cubes_internal]
+    type = 'CSVDiff'
+    input = 'two_cubes_internal.i'
+    csvdiff = 'two_cubes_internal_out.csv'
+    requirement = 'The system shall index the radiation patches internally when create_patch_sidesets = false, such that the facet-mode (n_patches = 0) vacuum_ray_tracing calculation reproduces the per-facet heat flux of the patched-sideset calculation without adding any patch sideset to the mesh.'
+    capabilities = 'xdg'
+    mesh_mode = REPLICATED # the vacuum ray tracing view factor calculation requires a serial replicated mesh
+  []
+
   [sphere_cube]
     type = 'CSVDiff'
     input = 'sphere_cube.i'

@@ -76,6 +76,11 @@ VacuumRayViewFactor::finalizeViewFactor()
 Real
 VacuumRayViewFactor::getEscapeFraction(BoundaryID id) const
 {
+  // the escape fractions of an object with internal patches are indexed by patch, not by
+  // boundary; returning the entry of the first patch of the boundary would be misleading
+  if (_n_sides != boundaryNames().size())
+    mooseError("The escape fractions of this object are indexed by patch, not by boundary.");
+
   return _escape_fractions[getSideNameIndex(_mesh.getBoundaryName(id))];
 }
 

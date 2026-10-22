@@ -41,10 +41,7 @@ ViewFactorObjectSurfaceRadiation::setViewFactors()
   // when the patches are internal, the surfaces of the view factor object and of this object are
   // ordered the same way (boundary by boundary, patch by patch), so no permutation is needed
   if (view_factor_uo.usesInternalPatches())
-  {
-    _vf_matrix = view_factor_uo.viewFactorMatrix();
-    return &_vf_matrix;
-  }
+    return &view_factor_uo.viewFactorMatrix();
 
   // this object and the view factor object may list their boundaries in different orders, so
   // the view factor entries are permuted into this object's ordering
