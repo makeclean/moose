@@ -89,6 +89,11 @@ VacuumRayViewFactorStudy::validParams()
                                   direction,
                                   "The sort direction if using the centroid partitioner.");
 
+  params.addParam<Real>(
+      "ray_bump",
+      "Distance to nudge the ray origin along the surface normal to prevent self-intersection. "
+      "Defaults to the XDG volume bounding box dilation distance or 1e-3.");
+
   params.addClassDescription(
       "Computes view factors and escape fractions between surfaces radiating into an open "
       "(vacuum) environment by ray tracing with the XDG library.");
@@ -138,12 +143,12 @@ VacuumRayViewFactorStudy::VacuumRayViewFactorStudy(const InputParameters & param
   unsigned int offset = 0;
   for (const auto j : index_range(_boundary_ids))
   {
-    _patches.push_back(std::make_unique<SideSetPatch>(
-        _mesh.getMesh(),
-        _boundary_ids[j],
-        n_patches[j],
-        partitioners.size() ? partitioners[j] : "metis",
-        directions.size() ? directions[j] : ""));
+    _patches.push_back(
+        std::make_unique<SideSetPatch>(_mesh.getMesh(),
+                                       _boundary_ids[j],
+                                       n_patches[j],
+                                       partitioners.size() ? partitioners[j] : "metis",
+                                       directions.size() ? directions[j] : ""));
 
     _surface_offsets.push_back(offset);
     _surface_boundary.insert(_surface_boundary.end(), _patches[j]->nPatches(), j);
@@ -155,10 +160,6 @@ VacuumRayViewFactorStudy::VacuumRayViewFactorStudy(const InputParameters & param
 
   if (_mesh.dimension() != 3)
     mooseError("VacuumRayViewFactorStudy only supports three-dimensional meshes.");
-
-  if (!dynamic_cast<const ReplicatedMesh *>(&_mesh.getMesh()))
-    mooseError("VacuumRayViewFactorStudy requires a serial (replicated) mesh. "
-               "Distributed meshes are not supported.");
 
   _fe_face->attach_quadrature_rule(_q_face.get());
   _fe_face->get_xyz();
@@ -174,8 +175,15 @@ VacuumRayViewFactorStudy::initialSetup()
   if (_tid != 0)
     return;
 
-  // hand the whole mesh to XDG: each sideset becomes a surface and the complement
-  // of the mesh becomes the void volume the rays travel through
+  // hand the mesh to XDG: on a distributed mesh, clone it into a replicated mesh first
+  // so that every processor has the complete geometry in its XDG ray tracer
+  const libMesh::MeshBase * xdg_mesh = &_mesh.getMesh();
+  if (!dynamic_cast<const libMesh::ReplicatedMesh *>(xdg_mesh))
+  {
+    _replicated_mesh = std::make_unique<libMesh::ReplicatedMesh>(_mesh.getMesh());
+    xdg_mesh = _replicated_mesh.get();
+  }
+
 #ifdef XDG_ENABLE_LIBMESH
   // XDG constructs its own libMesh::LibMeshInit unless the host application
   // registers one; a second LibMeshInit would install a second thread-buffered
@@ -188,7 +196,7 @@ VacuumRayViewFactorStudy::initialSetup()
     xdg::XDGConfig::config().set_libmesh_external_init(MooseInit::instance());
     xdg_registered = true;
   }
-  auto mesh_manager = std::make_shared<xdg::LibMeshManager>(&_mesh.getMesh());
+  auto mesh_manager = std::make_shared<xdg::LibMeshManager>(xdg_mesh);
   _xdg = std::make_shared<xdg::XDG>();
   _xdg->set_mesh_manager_interface(mesh_manager);
 #ifdef XDG_ENABLE_EMBREE
@@ -204,9 +212,7 @@ VacuumRayViewFactorStudy::initialSetup()
 
   _void_volume = mesh_manager->implicit_complement();
 
-  // every XDG surface of the model must be one of the participating boundaries,
-  // and vice versa: there is no support for non-participating (blocking) surfaces
-  // or for sidesets that XDG splits into more than one surface
+  // every participating boundary must form a surface in the XDG model
   std::set<xdg::MeshID> model_surfaces(mesh_manager->surfaces().begin(),
                                        mesh_manager->surfaces().end());
   for (const auto & pair : _boundary_index)
@@ -216,15 +222,6 @@ VacuumRayViewFactorStudy::initialSetup()
                  " does not form a single surface of the XDG model. The vacuum (open geometry) "
                  "view factor calculation does not support sidesets that share interfaces with "
                  "other sidesets.");
-  for (const auto surface : model_surfaces)
-    if (!_boundary_index.count(surface))
-      mooseError("Surface ",
-                 surface,
-                 " (",
-                 _mesh.getBoundaryName(surface),
-                 ") of the XDG model does not participate in the radiative exchange. Every "
-                 "sideset of the mesh must be listed in the 'boundary' parameter when using "
-                 "view_factor_calculator = vacuum_ray_tracing.");
 
   // map the node ids of every face of the participating surfaces to its XDG face
   // id; this is used to exclude the emitting face from each ray trace
@@ -240,12 +237,12 @@ VacuumRayViewFactorStudy::initialSetup()
   // map every XDG face to the patch (surface) that contains it, so that a ray hit can be
   // credited to the right patch without looking the face up during every ray trace
   for (const auto & [elem_id, side, sideset] :
-       _mesh.getMesh().get_boundary_info().build_active_side_list())
+       xdg_mesh->get_boundary_info().build_active_side_list())
   {
     if (!_boundary_index.count(sideset))
       continue;
 
-    const libMesh::Elem * elem = _mesh.getMesh().elem_ptr(elem_id);
+    const libMesh::Elem * elem = xdg_mesh->elem_ptr(elem_id);
     const auto node_ids = sideNodeIds(*elem, side);
 
     const auto face_it = _face_id_by_node_ids.find(node_ids);
@@ -256,10 +253,12 @@ VacuumRayViewFactorStudy::initialSetup()
     _surface_by_face[face_it->second] = surfaceIndex(*elem, side);
   }
 
-  // nudge the ray origin off the emitting surface by the same dilation distance
-  // that XDG uses to inflate its bounding boxes, so that the first hit cannot be
-  // the emitting face itself
-  _bump = std::max(mesh_manager->volume_bounding_box(_void_volume).dilation(), 1e-3);
+  // nudge the ray origin off the emitting surface by the dilation distance
+  // or user-provided ray_bump
+  if (isParamValid("ray_bump"))
+    _bump = getParam<Real>("ray_bump");
+  else
+    _bump = std::max(mesh_manager->volume_bounding_box(_void_volume).dilation(), 1e-3);
 }
 
 void
@@ -320,7 +319,11 @@ VacuumRayViewFactorStudy::execute()
           model->_void_volume, pos, dir, xdg::INFTY, xdg::HitOrientation::ANY, &exclude);
 
       if (hit_surface != xdg::ID_NONE)
-        _vf_weights.add(from, libmesh_map_find(model->_surface_by_face, exclude.back()), weight);
+      {
+        const auto it = model->_surface_by_face.find(exclude.back());
+        if (it != model->_surface_by_face.end())
+          _vf_weights.add(from, it->second, weight);
+      }
       else
         _escape_weights[from] += weight;
     }

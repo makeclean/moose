@@ -86,10 +86,10 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
     _temperature(coupledValue("temperature")),
     _internal_patches(false),
     _environment(getParam<MooseEnum>("environment")),
-    _environment_temperature(isParamSetByUser("environment_temperature")
-                                 ? &getFunctionByName(
-                                       getParam<FunctionName>("environment_temperature"))
-                                 : nullptr),
+    _environment_temperature(
+        isParamSetByUser("environment_temperature")
+            ? &getFunctionByName(getParam<FunctionName>("environment_temperature"))
+            : nullptr),
     _view_factors(nullptr),
     _mat(nullptr),
     _ksp(nullptr),
@@ -182,7 +182,10 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
                  "). Radiation boundaries must not share any faces.");
   }
 
-  // a boundary without faces has no area and no view factors
+  // a boundary without faces has no area and no view factors; sum across processors
+  // so that ranks owning no elements of boundary j on a distributed mesh do not error
+  this->comm().sum(boundary_sides);
+
   for (const auto j : index_range(boundary_sides))
     if (boundary_sides[j] == 0)
       paramError("boundary",
@@ -284,13 +287,13 @@ GrayLambertSurfaceRadiationBase::GrayLambertSurfaceRadiationBase(const InputPara
 GrayLambertSurfaceRadiationBase::~GrayLambertSurfaceRadiationBase()
 {
   if (_ksp)
-    LibmeshPetscCall(KSPDestroy(&_ksp));
+    (void)KSPDestroy(&_ksp);
   if (_mat)
-    LibmeshPetscCall(MatDestroy(&_mat));
+    (void)MatDestroy(&_mat);
   if (_rhs)
-    LibmeshPetscCall(VecDestroy(&_rhs));
+    (void)VecDestroy(&_rhs);
   if (_radiosity_vec)
-    LibmeshPetscCall(VecDestroy(&_radiosity_vec));
+    (void)VecDestroy(&_radiosity_vec);
 }
 
 unsigned int
@@ -321,11 +324,11 @@ void
 GrayLambertSurfaceRadiationBase::execute()
 {
   const unsigned int index =
-      _internal_patches ? libmesh_map_find(_side_surface,
-                                           std::make_pair(_current_elem->id(), _current_side))
-                        : getSideIDIndex(_current_boundary_id);
+      _internal_patches
+          ? libmesh_map_find(_side_surface, std::make_pair(_current_elem->id(), _current_side))
+          : getSideIDIndex(_current_boundary_id);
 
-  for (unsigned int qp = 0; qp < _qrule->n_points(); qp++)
+  for (const auto qp : make_range(_qrule->n_points()))
   {
     _areas[index] += _JxW[qp] * _coord[qp];
 
@@ -383,7 +386,7 @@ GrayLambertSurfaceRadiationBase::initialize()
       LibmeshPetscCall(MatSetValues(
           _mat, 1, &row, (PetscInt)cols.size(), cols.data(), vals.data(), INSERT_VALUES));
     }
-    LibmeshPetscCall(MatAssemblyBegin(_mat, MAT_FLUSH_ASSEMBLY));
+    LibmeshPetscCall(MatAssemblyBegin(_mat, MAT_FINAL_ASSEMBLY));
     LibmeshPetscCall(MatAssemblyEnd(_mat, MAT_FINAL_ASSEMBLY));
 
     LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &_ksp));
@@ -402,7 +405,7 @@ GrayLambertSurfaceRadiationBase::initialize()
   }
 
   // initialize areas, beta, side temps
-  for (unsigned int j = 0; j < _n_sides; ++j)
+  for (const auto j : make_range(_n_sides))
   {
     _areas[j] = 0;
     _beta[j] = 0;
@@ -419,7 +422,7 @@ GrayLambertSurfaceRadiationBase::finalize()
   gatherSum(_side_temperature);
 
   // first compute averages from the totals
-  for (unsigned int j = 0; j < _n_sides; ++j)
+  for (const auto j : make_range(_n_sides))
   {
     _beta[j] /= _areas[j];
     _side_temperature[j] /= _areas[j];
@@ -455,7 +458,7 @@ GrayLambertSurfaceRadiationBase::finalize()
     LibmeshPetscCall(MatSetValues(
         _mat, 1, &row, (PetscInt)cols.size(), cols.data(), vals.data(), INSERT_VALUES));
   }
-  LibmeshPetscCall(MatAssemblyBegin(_mat, MAT_FLUSH_ASSEMBLY));
+  LibmeshPetscCall(MatAssemblyBegin(_mat, MAT_FINAL_ASSEMBLY));
   LibmeshPetscCall(MatAssemblyEnd(_mat, MAT_FINAL_ASSEMBLY));
 
   // right-hand side of the radiosity system
@@ -506,9 +509,12 @@ GrayLambertSurfaceRadiationBase::finalize()
 
     if (_side_type[i] == ADIABATIC)
     {
-      Real e = _emissivity[i]->value(_side_temperature[i], Point());
-      _side_temperature[i] = std::pow(
-          (radiosity[i] + (1 - e) / e * _heat_flux_density[i]) / _sigma_stefan_boltzmann, 0.25);
+      const Real e = _emissivity[i]->value(_side_temperature[i], Point());
+      if (e > 0)
+        _side_temperature[i] = std::pow(
+            (radiosity[i] + (1 - e) / e * _heat_flux_density[i]) / _sigma_stefan_boltzmann, 0.25);
+      else
+        _side_temperature[i] = std::pow(radiosity[i] / _sigma_stefan_boltzmann, 0.25);
     }
 
     // compute the surface irradiation into i from the radiosities
@@ -533,7 +539,7 @@ GrayLambertSurfaceRadiationBase::threadJoin(const UserObject & y)
 {
   const auto & pps = cast_ref<const GrayLambertSurfaceRadiationBase &>(y);
 
-  for (unsigned int j = 0; j < _n_sides; ++j)
+  for (const auto j : make_range(_n_sides))
   {
     _areas[j] += pps._areas[j];
     _side_temperature[j] += pps._side_temperature[j];
@@ -664,7 +670,7 @@ GrayLambertSurfaceRadiationBase::getSurfaceEmissivity(const BoundaryID id) const
 
 Real
 GrayLambertSurfaceRadiationBase::getViewFactor(const BoundaryID from_id,
-                                              const BoundaryID to_id) const
+                                               const BoundaryID to_id) const
 {
   if (!_internal_patches)
     return _view_factors->get(getSideIDIndex(from_id), getSideIDIndex(to_id));

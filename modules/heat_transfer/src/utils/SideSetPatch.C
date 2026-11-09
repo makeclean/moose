@@ -19,6 +19,7 @@
 #include "libmesh/mesh_tools.h"
 #include "libmesh/morton_sfc_partitioner.h"
 #include "libmesh/replicated_mesh.h"
+#include "libmesh/parallel.h"
 #include "libmesh/utility.h"
 
 #include <algorithm>
@@ -60,58 +61,119 @@ SideSetPatch::buildBoundaryMesh(const libMesh::MeshBase & mesh)
   _boundary_mesh->set_mesh_dimension(_dim);
   _boundary_mesh->set_spatial_dimension(mesh.mesh_dimension());
 
-  // nodes in the new mesh by boundary_node_id (index)
-  std::vector<libMesh::Node *> boundary_nodes;
-  // a map from the node numbering on the volumetric mesh to the numbering on the boundary mesh
-  std::map<libMesh::dof_id_type, libMesh::dof_id_type> mesh_node_id_to_boundary_node_id;
+  struct SerializedFace
+  {
+    dof_id_type elem_id;
+    unsigned short int side;
+    int elem_type;
+    std::vector<dof_id_type> node_ids;
+    std::vector<Point> points;
+  };
 
-  libMesh::dof_id_type boundary_node_id = 0;
+  // Collect local boundary faces belonging to _sideset
+  std::vector<Real> local_face_data;
   for (const auto & side : mesh.get_boundary_info().build_active_side_list())
     if (std::get<2>(side) == _sideset)
     {
-      // the original volumetric mesh element
       const libMesh::Elem * elem = mesh.elem_ptr(std::get<0>(side));
-
-      // the boundary element
       std::unique_ptr<const libMesh::Elem> boundary_elem = elem->side_ptr(std::get<1>(side));
 
-      // the boundary node ids of this element in the right order
-      std::vector<libMesh::dof_id_type> bnd_elem_node_ids(boundary_elem->n_nodes());
+      local_face_data.push_back(static_cast<Real>(elem->id()));
+      local_face_data.push_back(static_cast<Real>(std::get<1>(side)));
+      local_face_data.push_back(static_cast<Real>(boundary_elem->type()));
+      local_face_data.push_back(static_cast<Real>(boundary_elem->n_nodes()));
 
       for (const auto j : make_range(boundary_elem->n_nodes()))
       {
         const libMesh::Node * node = boundary_elem->node_ptr(j);
-
-        const auto node_it = mesh_node_id_to_boundary_node_id.find(node->id());
-        if (node_it == mesh_node_id_to_boundary_node_id.end())
-        {
-          mesh_node_id_to_boundary_node_id.insert({node->id(), boundary_node_id});
-          boundary_nodes.push_back(
-              _boundary_mesh->add_point(libMesh::Point(*node), boundary_node_id));
-          bnd_elem_node_ids[j] = boundary_node_id;
-          ++boundary_node_id;
-        }
-        else
-          bnd_elem_node_ids[j] = node_it->second;
+        local_face_data.push_back(static_cast<Real>(node->id()));
+        local_face_data.push_back((*node)(0));
+        local_face_data.push_back((*node)(1));
+        local_face_data.push_back((*node)(2));
       }
-
-      std::unique_ptr<libMesh::Elem> new_bnd_elem = libMesh::Elem::build(boundary_elem->type());
-      if (new_bnd_elem->dim() >= 3)
-        mooseError("Unsupported element type (libMesh elem_type enum): ", boundary_elem->type());
-
-      libMesh::Elem * const bnd_elem = _boundary_mesh->add_elem(std::move(new_bnd_elem));
-      _boundary_elem_to_mesh_elem.insert({bnd_elem->id(), side});
-
-      for (const auto j : make_range(boundary_elem->n_nodes()))
-        bnd_elem->set_node(j, boundary_nodes[bnd_elem_node_ids[j]]);
     }
 
-  _boundary_mesh->prepare_for_use();
+  // On distributed meshes, some ranks may own no faces of _sideset. Allgather faces across
+  // all processors so that every processor builds the identical boundary mesh.
+  std::map<std::pair<dof_id_type, unsigned short int>, SerializedFace> global_faces;
 
-  if (_boundary_mesh->n_elem() == 0)
+  auto unpack_face_data = [&global_faces](const std::vector<Real> & buf)
+  {
+    std::size_t idx = 0;
+    while (idx < buf.size())
+    {
+      SerializedFace face;
+      face.elem_id = static_cast<dof_id_type>(buf[idx++]);
+      face.side = static_cast<unsigned short int>(buf[idx++]);
+      face.elem_type = static_cast<int>(buf[idx++]);
+      const auto n_nodes = static_cast<std::size_t>(buf[idx++]);
+      face.node_ids.resize(n_nodes);
+      face.points.resize(n_nodes);
+      for (const auto j : make_range(n_nodes))
+      {
+        face.node_ids[j] = static_cast<dof_id_type>(buf[idx++]);
+        const Real x = buf[idx++];
+        const Real y = buf[idx++];
+        const Real z = buf[idx++];
+        face.points[j] = Point(x, y, z);
+      }
+      global_faces[{face.elem_id, face.side}] = std::move(face);
+    }
+  };
+
+  if (mesh.comm().size() > 1)
+  {
+    std::vector<std::vector<Real>> all_face_data;
+    mesh.comm().allgather(local_face_data, all_face_data);
+    for (const auto & buf : all_face_data)
+      unpack_face_data(buf);
+  }
+  else
+    unpack_face_data(local_face_data);
+
+  if (global_faces.empty())
     mooseError("Boundary id ",
                _sideset,
                " has no faces. The patch subdivision requires a side set with at least one face.");
+
+  std::vector<libMesh::Node *> boundary_nodes;
+  std::map<libMesh::dof_id_type, libMesh::dof_id_type> mesh_node_id_to_boundary_node_id;
+  libMesh::dof_id_type boundary_node_id = 0;
+
+  for (const auto & [face_key, face] : global_faces)
+  {
+    const auto & [elem_id, side_num] = face_key;
+    const auto n_nodes = face.node_ids.size();
+    std::vector<libMesh::dof_id_type> bnd_elem_node_ids(n_nodes);
+
+    for (const auto j : make_range(n_nodes))
+    {
+      const auto node_id = face.node_ids[j];
+      const auto node_it = mesh_node_id_to_boundary_node_id.find(node_id);
+      if (node_it == mesh_node_id_to_boundary_node_id.end())
+      {
+        mesh_node_id_to_boundary_node_id.insert({node_id, boundary_node_id});
+        boundary_nodes.push_back(_boundary_mesh->add_point(face.points[j], boundary_node_id));
+        bnd_elem_node_ids[j] = boundary_node_id;
+        ++boundary_node_id;
+      }
+      else
+        bnd_elem_node_ids[j] = node_it->second;
+    }
+
+    std::unique_ptr<libMesh::Elem> new_bnd_elem =
+        libMesh::Elem::build(static_cast<libMesh::ElemType>(face.elem_type));
+    if (new_bnd_elem->dim() >= 3)
+      mooseError("Unsupported element type (libMesh elem_type enum): ", face.elem_type);
+
+    libMesh::Elem * const bnd_elem = _boundary_mesh->add_elem(std::move(new_bnd_elem));
+    _boundary_elem_to_mesh_elem.insert({bnd_elem->id(), {elem_id, side_num, _sideset}});
+
+    for (const auto j : make_range(n_nodes))
+      bnd_elem->set_node(j, boundary_nodes[bnd_elem_node_ids[j]]);
+  }
+
+  _boundary_mesh->prepare_for_use();
 }
 
 void
@@ -152,9 +214,8 @@ SideSetPatch::partition()
         _boundary_mesh->partitioner().reset(
             new libMesh::CentroidPartitioner(libMesh::CentroidPartitioner::RADIAL));
       else
-        mooseError("Unrecognized centroid partitioner direction ",
-                   _centroid_partitioner_direction,
-                   ".");
+        mooseError(
+            "Unrecognized centroid partitioner direction ", _centroid_partitioner_direction, ".");
     }
     else if (_partitioner == "hilbert_sfc")
       _boundary_mesh->partitioner().reset(new libMesh::HilbertSFCPartitioner);

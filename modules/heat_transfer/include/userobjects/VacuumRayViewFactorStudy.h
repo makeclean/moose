@@ -137,6 +137,9 @@ protected:
 
   /// distance by which ray origins are nudged off the emitting surface
   Real _bump;
+
+  /// replicated copy of the mesh when running on a distributed mesh
+  std::unique_ptr<libMesh::ReplicatedMesh> _replicated_mesh;
 };
 
 #endif // MOOSE_XDG_ENABLED

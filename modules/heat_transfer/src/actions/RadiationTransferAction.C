@@ -29,7 +29,8 @@ registerMooseAction("HeatTransferApp", RadiationTransferAction, "add_aux_kernel"
 namespace
 {
 /// whether a boundary name is actually a bare numeric boundary ID
-bool isNumericString(const std::string & s)
+bool
+isNumericString(const std::string & s)
 {
   return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return std::isdigit(c); });
 }
@@ -158,7 +159,9 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
     _boundary_names(getParam<std::vector<BoundaryName>>("boundary")),
     _view_factor_calculator(getParam<MooseEnum>("view_factor_calculator")),
     _add_heat_flux_aux(getParam<bool>("add_heat_flux_aux")),
-    _create_patch_sidesets(getParam<bool>("create_patch_sidesets"))
+    _create_patch_sidesets(params.isParamSetByUser("create_patch_sidesets")
+                               ? getParam<bool>("create_patch_sidesets")
+                               : (_view_factor_calculator != "vacuum_ray_tracing"))
 {
   const auto & symmetry_names = getParam<std::vector<BoundaryName>>("symmetry_boundary");
 
@@ -199,7 +202,8 @@ RadiationTransferAction::RadiationTransferAction(const InputParameters & params)
                    " is present in parameter boundary and symmetry_boundary.");
   }
 
-  if (_view_factor_calculator == "vacuum_ray_tracing" && getParam<bool>("normalize_view_factor"))
+  if (_view_factor_calculator == "vacuum_ray_tracing" &&
+      params.isParamSetByUser("normalize_view_factor") && getParam<bool>("normalize_view_factor"))
     paramError("normalize_view_factor",
                "View factor normalization is not supported with view_factor_calculator = "
                "vacuum_ray_tracing, because the radiation that escapes to the environment must not "
@@ -325,7 +329,7 @@ RadiationTransferAction::addFixedTemperatureBCs() const
       getParam<std::vector<FunctionName>>("fixed_boundary_temperatures");
   const auto & temperature = getParam<VariableName>("temperature");
 
-  for (unsigned int i = 0; i < fixed_temperature_boundaries.size(); ++i)
+  for (const auto i : index_range(fixed_temperature_boundaries))
   {
     InputParameters params = _factory.getValidParams("FunctionDirichletBC");
     params.set<FunctionName>("function") = fixed_boundary_temperatures[i];
@@ -378,6 +382,7 @@ RadiationTransferAction::addViewFactorObject() const
     params.set<ExecFlagEnum>("execute_on") = exec_enum;
     params.set<UserObjectName>("ray_study_name") = rayStudyName();
     params.set<bool>("print_view_factor_info") = getParam<bool>("print_view_factor_info");
+    params.set<bool>("normalize_view_factor") = false;
     _problem->addUserObject("VacuumRayViewFactor", viewFactorObjectName(), params);
   }
 }
@@ -496,9 +501,12 @@ RadiationTransferAction::addRadiationObject() const
 
   std::vector<FunctionName> extended_emissivity;
   if (_create_patch_sidesets)
-    for (unsigned int j = 0; j < _boundary_names.size(); ++j)
-      for (unsigned int i = 0; i < nPatch(j); ++i)
+    for (const auto j : index_range(_boundary_names))
+      for (const auto _ : make_range(nPatch(j)))
+      {
+        libmesh_ignore(_);
         extended_emissivity.push_back(emissivity[j]);
+      }
   else
     extended_emissivity = emissivity;
   params.set<std::vector<FunctionName>>("emissivity") = extended_emissivity;
@@ -532,7 +540,7 @@ RadiationTransferAction::addRadiationObject() const
 
     std::vector<BoundaryName> fixed_T_patch_names;
     std::vector<FunctionName> fixed_T_function_names;
-    for (unsigned int k = 0; k < fixed_T_boundary_names.size(); ++k)
+    for (const auto k : index_range(fixed_T_boundary_names))
     {
       BoundaryName bnd_name = fixed_T_boundary_names[k];
 
@@ -593,9 +601,8 @@ RadiationTransferAction::isPatched(unsigned int j) const
   if (!_create_patch_sidesets)
     return false;
 
-  // in the vacuum (open geometry) calculation, a sideset with n_patches = 1 is not split
-  if (_view_factor_calculator == "vacuum_ray_tracing" &&
-      getParam<std::vector<unsigned int>>("n_patches")[j] == 1)
+  // a sideset with n_patches = 1 is already a single patch and is not split
+  if (getParam<std::vector<unsigned int>>("n_patches")[j] == 1)
     return false;
   return true;
 }
@@ -698,7 +705,7 @@ RadiationTransferAction::addMeshGenerator()
   if (_boundary_names.size() != partitioners.size())
     mooseError("partitioners parameter must have same length as boundary parameter.");
 
-  for (unsigned int j = 0; j < partitioners.size(); ++j)
+  for (const auto j : index_range(partitioners))
     if (partitioners[j] == "centroid" && direction.size() != _boundary_names.size())
       mooseError(
           "centroid partitioner is selected for at least one sideset. "
@@ -721,7 +728,7 @@ RadiationTransferAction::addMeshGenerator()
                  "MeshGeneratorMesh.");
   }
 
-  for (unsigned int j = 0; j < _boundary_names.size(); ++j)
+  for (const auto j : index_range(_boundary_names))
   {
     if (!isPatched(j))
       continue;
@@ -763,8 +770,11 @@ RadiationTransferAction::patchPartitioners() const
   if (!_pars.isParamSetByUser("partitioners"))
   {
     partitioners.clearSetValues();
-    for (unsigned int j = 0; j < _boundary_names.size(); ++j)
+    for (const auto _ : index_range(_boundary_names))
+    {
+      libmesh_ignore(_);
       partitioners.setAdditionalValue("metis");
+    }
   }
   return partitioners;
 }

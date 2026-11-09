@@ -10,7 +10,7 @@
 #include "ViewFactorMatrix.h"
 #include "MooseUtils.h"
 
-#include "timpi/communicator.h"
+#include "libmesh/parallel.h"
 
 #include <algorithm>
 #include <map>
@@ -67,36 +67,31 @@ ViewFactorMatrix::clear()
 void
 ViewFactorMatrix::gatherSum(const libMesh::Parallel::Communicator & comm)
 {
-  // Every row participates in the collectives, even rows that are empty on
-  // this processor, so that all processors call the same collective sequence
+  if (comm.size() <= 1)
+    return;
+
+  // Pack all nonzeros into a single buffer per processor to avoid an O(N) collective storm
+  std::vector<unsigned int> flat_indices;
+  std::vector<Real> flat_values;
   for (const auto i : make_range(nRows()))
-  {
-    std::vector<unsigned int> cols;
-    std::vector<Real> values;
     for (const auto & [col, value] : row(i))
     {
-      cols.push_back(col);
-      values.push_back(value);
+      flat_indices.push_back(i);
+      flat_indices.push_back(col);
+      flat_values.push_back(value);
     }
 
-    // the columns and values of this row on every processor; the sum over
-    // the processors is then a local computation
-    std::vector<std::vector<unsigned int>> all_cols;
-    std::vector<std::vector<Real>> all_values;
-    comm.allgather(cols, all_cols);
-    comm.allgather(values, all_values);
+  std::vector<std::vector<unsigned int>> all_indices;
+  std::vector<std::vector<Real>> all_values;
+  comm.allgather(flat_indices, all_indices);
+  comm.allgather(flat_values, all_values);
 
-    // std::map keeps the union of the columns sorted
-    std::map<unsigned int, Real> sums;
-    for (const auto p : make_range(all_cols.size()))
-      for (const auto k : make_range(all_cols[p].size()))
-        sums[all_cols[p][k]] += all_values[p][k];
-
-    std::vector<Entry> new_row;
-    new_row.reserve(sums.size());
-    for (const auto & [col, sum] : sums)
-      if (sum != 0)
-        new_row.emplace_back(col, sum);
-    row(i) = std::move(new_row);
+  clear();
+  for (const auto p : index_range(all_indices))
+  {
+    const auto & indices = all_indices[p];
+    const auto & values = all_values[p];
+    for (const auto k : index_range(values))
+      add(indices[2 * k], indices[2 * k + 1], values[k]);
   }
 }

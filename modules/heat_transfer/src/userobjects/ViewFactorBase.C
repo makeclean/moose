@@ -52,8 +52,8 @@ ViewFactorBase::ViewFactorBase(const InputParameters & parameters)
     _view_factors(_n_sides)
 {
   // set up the map from the side id to the local index & side name to local index
-  std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
-  for (unsigned int j = 0; j < boundary_names.size(); ++j)
+  const std::vector<BoundaryName> boundary_names = getParam<std::vector<BoundaryName>>("boundary");
+  for (const auto j : index_range(boundary_names))
     _side_name_index[boundary_names[j]] = j;
 }
 
@@ -176,7 +176,7 @@ void
 ViewFactorBase::threadJoin(const UserObject & y)
 {
   const auto & pps = cast_ref<const ViewFactorBase &>(y);
-  for (unsigned int i = 0; i < _n_sides; ++i)
+  for (const auto i : make_range(_n_sides))
     _areas[i] += pps._areas[i];
 
   threadJoinViewFactor(y);
@@ -251,9 +251,9 @@ ViewFactorBase::checkAndNormalizeViewFactor()
     {
       auto from_name = surfaceName(from);
       _console << "View factors from surface " << from_name << " sum to "
-               << viewFactorRowSum(from) + getEscapeFraction(from) << " ("
-               << viewFactorRowSum(from) << " of which is a view factor, and "
-               << getEscapeFraction(from) << " is the escape fraction)." << std::endl;
+               << viewFactorRowSum(from) + getEscapeFraction(from) << " (" << viewFactorRowSum(from)
+               << " of which is a view factor, and " << getEscapeFraction(from)
+               << " is the escape fraction)." << std::endl;
     }
 
   if (max_sum_deviation > _view_factor_tol)
